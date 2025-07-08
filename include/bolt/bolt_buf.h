@@ -258,9 +258,9 @@ public:
      * 
      * @param n sizeof the chunk requested
      */
-    inline void Prepare(const size_t n)
+    inline void Grow(const size_t n)
     {
-        if (!stat.Should_Grow(capacity))
+        if (!stat.Should_Grow(capacity) && (write_offset + n <= capacity - TAIL_SIZE))
             return; 
         
         size_t new_capacity = capacity << 1;
@@ -277,22 +277,7 @@ public:
         raw_ptr = std::move(new_raw_ptr);
         data = new_data;
         capacity = new_capacity;
-        // if (write_offset + n <= capacity)
-        //     return;
-        
-        // size_t new_capacity = (capacity << 1);
-        // while (write_offset + n > new_capacity)
-        //     new_capacity <<= 1;
-        
-        // auto new_raw_ptr = Allocate_Aligned(new_capacity);
-        // u8 *new_data = new_raw_ptr.get();
-        // iCpy(new_data, data, write_offset);  // copy only written part
-
-        // // Replace old buffer
-        // raw_ptr = std::move(new_raw_ptr);
-        // data = new_data;
-        // capacity = new_capacity;
-    } // end Prepare
+    } // end Grow
 
 
     inline void Shrink()
@@ -322,14 +307,14 @@ public:
 
     inline size_t Writable_Size() const 
     {
-        return capacity - write_offset;
+        return capacity - write_offset - TAIL_SIZE;
     } // end Writable_Size
     
 
     inline void Append(BoltBuf& encoded)
     {
         if (write_offset + encoded.Size() > capacity)
-            if (!Try_Grow());
+            if (!Try_Grow())
                 return;
 
         iCpy(data + write_offset, encoded.Data(), encoded.Size());

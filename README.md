@@ -3,7 +3,51 @@ A high-speed neo4j C++ driver over bolt protocol
 
 
 # Internals
-# 🔩 BoltPool - High-Performance Temporary Memory Pool for Bolt Protocol Decoding (still work in progress)
+## ⚡ BoltBuf: Adaptive High-Performance I/O Buffer
+
+`BoltBuf` is a zero-copy, hardware-aligned buffer used per connection in LightningBolt to manage reads and writes. It is tuned for:
+
+- 🚀 High-throughput streaming
+- 🎯 Cache-line alignment
+- 🧠 Partial message safety
+- 📈 Adaptive resizing
+- 🧵 Lock-free usage in single-connection contexts
+
+---
+
+### ✅ Key Features
+
+- **Cache-Aligned Memory**  
+  Uses `posix_memalign()` to align memory to `CACHE_LINE_SIZE` (e.g., 64 bytes), improving cache performance.
+
+- **Zero-Copy Streaming**  
+  Exposes raw pointers via `Read_Ptr()` and `Write_Ptr()`, avoiding unnecessary memory copies.
+
+- **Safe Read/Write Pointers**  
+  Maintains `read_offset` and `write_offset` to track unprocessed vs. writable regions.
+
+- **EMA-Based Traffic Monitoring**  
+  Learns traffic patterns via Exponential Moving Average (EMA) and resizes accordingly.
+
+- **Idle-Time Shrinking**  
+  The buffer shrinks only when the driver is idle, ensuring no impact on active performance.
+
+- **Tail Safety**  
+  Reserves buffer space near the end (`TAIL_SIZE`) to prevent partial message overwrites.
+
+---
+
+### 📊 EMA-Based Resizing Logic
+
+Internally, `BoltBuf` uses an exponential moving average to track recent I/O volumes:
+
+```cpp
+ema = alpha * bytes_this_cycle + (1 - alpha) * ema;
+
+
+
+
+## 🔩 BoltPool - High-Performance Temporary Memory Pool for Bolt Protocol Decoding (still work in progress)
 
 `BoltPool` is a high-speed, zero-allocation-on-fast-path memory pool designed for temporary allocation of Bolt protocol data structures (e.g., `BoltValue`, `List`, `Struct`, `Map`). It provides an efficient two-tiered memory allocation system optimized for minimal memory overhead, maximum locality, and rapid reuse across decoding cycles or queries.
 
