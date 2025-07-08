@@ -43,8 +43,99 @@ Internally, `BoltBuf` uses an exponential moving average to track recent I/O vol
 
 ```cpp
 ema = alpha * bytes_this_cycle + (1 - alpha) * ema;
+```
+Where:
+    alpha = 0.2
+    ema is the exponentially weighted average of recent traffic
 
+**Resize Conditions:**
+**Condition	                      Action**
+ema > capacity * 0.8	            🔼 Grow
+ema < capacity * 0.8 (when idle)	🔽 Shrink
 
+**🔧 Typical Usage**
+**Receiving Data**
+```cpp
+// Receive data directly into BoltBuf
+ssize_t n = recv(fd, buf.Write_Ptr(), buf.Writable_Size(), 0);
+if (n > 0) {
+    buf.Advance(n);
+    buf.Update_Stat(n);  // Feed into EMA
+    buf.Grow();          // Conditionally grow if high traffic
+}
+```
+**Decoding Loop**
+```cpp
+// Decode messages in sequence
+while (Has_Complete_Message(buf)) {
+    Decode(buf.Read_Ptr());
+    buf.Consume(message_length);
+}
+```
+**Shrinking on Idle**
+```cpp
+if (connection->Is_Idle())
+    buf.Shrink();  // Only shrink when safe
+```
+**Appending Bolt-Encoded Buffers**
+```cpp
+BoltBuf output_buf;
+BoltBuf partial_encoded = Encoder::Encode(my_value);
+
+output_buf.Append(partial_encoded);  // Efficient copy
+```
+
+**📐 Memory Layout Overview**
+
+[data ......................] → entire capacity
+ ^            ^             ^
+ |            |             |
+read_offset  write_offset  capacity
+
+[data between read_offset and write_offset] → ready for decode  
+[write_offset to capacity - TAIL_SIZE]      → safe to write  
+[capacity - TAIL_SIZE to capacity]          → tail buffer guard  
+
+**🧱 Design Principles**
+
+    - One buffer per connection
+    - No need for locks or atomic ops
+    - Write-ahead friendly for pipelined query mode
+    - Compatible with SIMD-accelerated decode
+    - Ideal for high-frequency recv-decode cycles
+    - Defensive bounds logic prevents message overflow or fragmentation
+
+**📎 API Summary**
+**Method**	          **Purpose**
+Read_Ptr()	      Pointer to data ready for decoding
+Write_Ptr()	      Pointer to space ready for writing
+Advance(n)	      Advance write head after recv()
+Consume(n)	      Advance read head after decoding
+Grow()	          Doubles buffer if traffic is high
+Shrink()	        Halves buffer if traffic drops and idle
+Update_Stat(n)	  Updates EMA using current recv size
+Writable_Size()	  Returns space left before end of buffer
+Size()	          Returns amount of unread data
+Empty()	          Returns true if buffer has no data
+Append(buf)	      Appends another BoltBuf's content
+Reset()	          Resets both read and write offsets to 0
+Reset_Read()	    Resets only the read offset to 0
+
+**🚦 Internal Notes**
+
+    - Grow() respects TAIL_SIZE by ensuring enough slack even after expansion
+    - Shrink() happens only when the connection is idle and the buffer has been consumed
+    - EMA and buffer behavior controlled by an internal BufferStats structure
+
+**📁 Source**
+
+    Implementation: src/core/bolt_buf.hpp
+    
+**🔗 Best Used With**
+
+    - Pipelined query dispatch logic
+    - Thread-per-connection decoder workers
+    - SIMD-accelerated decoding pipelines
 
 
 ## 🔩 BoltPool - High-Performance Temporary Memory Pool for Bolt Protocol Decoding (still work in progress)
@@ -97,3 +188,4 @@ pool.Release(10);
 
 // Or reset the entire pool
 pool.Reset_All();
+```
