@@ -1,0 +1,166 @@
+/**
+ * @file bolt_decoder.h
+ * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
+ * 
+ * @brief Defintion of BoltDecoder object
+ * 
+ * @version 1.0
+ * @date 13th of April 2025, Sunday.
+ * 
+ * @copyright Copyright (c) 2025
+ * 
+ */
+#pragma once
+
+
+
+//===============================================================================|
+//          INCLUDES
+//===============================================================================|
+#include "bolt/bolt_buf.h"
+#include "bolt/bolt_message.h"
+#include "bolt/boltvalue_pool.h"
+#include "bolt/bolt_jump_table.h"
+#include "utils/utils.h"
+#include "utils/errors.h"
+
+
+
+
+
+//===============================================================================|
+//          MACRO
+//===============================================================================|
+
+
+
+
+//===============================================================================|
+//          CLASS
+//===============================================================================|
+/**
+ * @brief a helper bolt message encoder class.
+ */
+class BoltDecoder
+{
+friend class BoltValue;
+
+public:
+
+    BoltDecoder(BoltBuf &b) : buf(b) {}
+
+    void Decode(BoltValue &out)
+    {
+        u8* start_pos = buf.Read_Ptr();
+        u8* pos = start_pos;
+        size_t size = buf.Size();
+        
+        while (size > pos - start_pos) 
+        {
+            u8 tag = *pos;
+            jump_table[tag](pos, out);
+            if (out.type == BoltType::Unk)
+            {
+                Dump_Err("Unkown type decoded.");
+                return;
+            } // end if
+        } // end while
+        
+        buf.Consume(size);
+    } // end Decode
+
+    
+    /**
+     * 
+     */
+    void Decode(BoltMessage& msg)
+    {
+        u16 chunk = *((u16*)buf.Read_Ptr());
+        msg.chunk_size = htons(chunk);
+        buf.Consume(2);
+        
+        u8* start = buf.Read_Ptr();
+        u8* pos = start;
+        while (msg.chunk_size > (pos - start))
+        {
+            u8 tag = *pos;
+            jump_table[tag](pos, msg.msg);
+        } // end while
+        
+        if (*(u16*)(buf.Read_Ptr()) == 0x00)
+            buf.Consume(2 + msg.chunk_size);
+        else 
+            buf.Consume(msg.chunk_size);
+    } // end Decode overloaded
+
+
+    /**
+     * 
+     */
+    int Decode(u8* view_start, BoltMessage &msg)
+    {
+        u16 chunk = *((u16*)view_start);
+        msg.chunk_size = htons(chunk);
+
+        u8* pos = view_start + 2;
+        while (msg.chunk_size > (pos - view_start))
+        {
+            u8 tag = *pos;
+            if (!jump_table[tag](pos, msg.msg))
+            {
+                error_string = "Unexpected tag: " + std::to_string(tag);
+                return -1;
+            } // end if
+        } // end while
+
+        u32 consumed = msg.chunk_size + 2;
+        if (*(u16*)(pos) == 0x00)
+            consumed += 2;
+
+        buf.Consume(consumed);    
+        // printf("> Inside decoder: %s\n", msg.ToString().c_str());
+        // Dump_Hex((const char*)buf.Data(), msg.chunk_size+4);
+        return consumed;
+    } // end Decode overloaded
+
+
+    // std::vector<BoltMessage> Decode()
+    // {
+    //     std::vector<BoltMessage> messages;
+    //     while (buf.Size() > 0)
+    //     {
+    //         BoltMessage msg;
+    //         u16 chunk = *((u16*)buf.Read_Ptr());
+    //         msg.chunk_size = htons(chunk);
+    //         buf.Consume(2);
+
+    //         u8* ptr = buf.Read_Ptr();
+    //         while (msg.chunk_size > ptr - buf.Read_Ptr())
+    //         {
+    //             msg.msg = jump_table[*ptr](ptr);
+    //         } // end while one row/schema/node/relation/object/etc
+
+    //         messages.push_back(std::move(msg));
+    //         if (*((u16*)ptr) == 0x00)
+    //             buf.Consume(2);
+            
+    //         buf.Consume(msg.chunk_size);
+    //     } // end while
+
+    //     return messages;
+    // } // end Decode many
+
+    /**
+     * @brief returns a string representaion of the last
+     *  decoding error encountered
+     */
+    std::string Get_Last_Error() const 
+    {
+        return error_string;
+    } // end Get_Last_Error
+
+private:
+
+    BoltBuf &buf;
+    std::string error_string;
+}; 
