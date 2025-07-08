@@ -86,12 +86,12 @@ output_buf.Append(partial_encoded);  // Efficient copy
 ```
 
 **📐 Memory Layout Overview**
-
+```
 [data ......................] → entire capacity
  ^            ^             ^
  |            |             |
 read_offset  write_offset  capacity
-
+```
 [data between read_offset and write_offset] → ready for decode  
 [write_offset to capacity - TAIL_SIZE]      → safe to write  
 [capacity - TAIL_SIZE to capacity]          → tail buffer guard  
