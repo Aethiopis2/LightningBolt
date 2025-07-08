@@ -3,7 +3,7 @@ A high-speed neo4j C++ driver over bolt protocol
 
 
 # Internals
-## ⚡ BoltBuf: Adaptive High-Performance I/O Buffer
+## BoltBuf: Adaptive High-Performance I/O Buffer
 
 `BoltBuf` is a zero-copy, hardware-aligned buffer used per connection in LightningBolt to manage reads and writes. It is tuned for:
 
