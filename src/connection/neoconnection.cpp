@@ -30,11 +30,14 @@
 /**
  * @brief Parses the connection string only, makes it easy for object construction.
  */
-NeoConnection::NeoConnection(void* pdisp, u64 id, const std::string &con_string)
-    :pdispatcher(pdisp), encoder(write_buf), decoder(read_buf), state(BoltState::Disconnected)
+NeoConnection::NeoConnection(const u64 cli_id, const std::string& con_string)
+    :encoder(write_buf), decoder(read_buf)
 {
-    client_id = id;
-    supported_version = 0;
+    client_id = cli_id;
+    is_version5 = false;
+    current_qid = hello_count = supported_version = 0;
+
+    Set_State(BoltState::Disconnected);
     if (!Parse_Conn_String(con_string))
         Fatal("Invalid connection string: %s", con_string.c_str());
 } // end NeoConnection
@@ -73,8 +76,6 @@ bool NeoConnection::Is_Closed() const
 int NeoConnection::Start()
 {
     Set_State(BoltState::Connecting);
-    qinfo.Enqueue({-1, BoltState::Connecting, nullptr});
-
     if (Connect() < 0)
         return -1;
 
@@ -88,13 +89,14 @@ int NeoConnection::Start()
         hello = &NeoConnection::Send_Hellov4;
      
     // non-blocking socket
-    if (Toggle_NonBlock() < 0)
-        return -1;
+    // if (Toggle_NonBlock() < 0)
+    //     return -1;
     
     ret = (this->*hello)(false);
     if (ret < 0)
         return -1;
 
+    Poll_Readable();
     return 0;
 } // end Start
 
@@ -107,19 +109,19 @@ void NeoConnection::Stop()
 {
     if (Get_State() != BoltState::Disconnected)
     {
-        if (isVersion5)
+        if (is_version5)
         {
+            is_version5 = false;
+            Set_State(BoltState::Connecting);
             BoltMessage off(BoltValue(BOLT_LOGOFF, {}));
             encoder.Encode(off);
-            BoltValue::Free_Bolt_Value(off.msg);
             Flush();
 
-            Recv((char*)read_buf.Write_Ptr(), read_buf.Size());
+            Poll_Readable();
         } // end if
 
         BoltMessage gb(BoltValue(BOLT_GOODBYE, {}));
         encoder.Encode(gb);
-        BoltValue::Free_Bolt_Value(gb.msg);
         Flush();
     } // end if not connecting
 
@@ -133,8 +135,6 @@ void NeoConnection::Stop()
  */
 int NeoConnection::Run_Query(std::shared_ptr<BoltRequest> req)
 {
-    Wait_Until(BoltState::Ready);
-    //printf(">inside run query\n"); 
     BoltMessage run(
         BoltValue(BOLT_RUN, {
             req->cypher, 
@@ -142,86 +142,130 @@ int NeoConnection::Run_Query(std::shared_ptr<BoltRequest> req)
             req->extras
         })
     );  
+
     encoder.Encode(run);
-    BoltValue::Free_Bolt_Value(run.msg);
-    qinfo.Enqueue({-1, BoltState::Run, req->On_Complete ? req->On_Complete : nullptr});
+    Encode_Pull();
+    // query_info.Enqueue({static_cast<s64>(current_qid), 2, 
+    //     req->On_Complete ? req->On_Complete : nullptr});
+    
+    Flush();
+    return 0;
+} // end Run_Query
 
 
-    ((CentralDispatcher*)pdispatcher)->Add_Ref();
+
+//===============================================================================|
+/**
+ * @brief a dispatcher based run query
+ */
+int NeoConnection::Run_Query(const char* cypher)
+{
+    BoltState s = Get_State();
+    if (s != BoltState::Ready && s != BoltState::Run)
+    {
+        err_string = "invalid state: " + State_ToString();
+        return -2;  // app error
+    } // end if
+
+    BoltMessage run(
+        BoltValue(BOLT_RUN, {
+            cypher, 
+            BoltValue::Make_Map(), 
+            BoltValue::Make_Map()
+        })
+    );  
+
+    encoder.Encode(run);
+    Encode_Pull();
+    Flush();
+
+    Set_State(BoltState::Run);
+    num_queries++;
+    has_more = true;
+    return 0;
+} // end Run_Query
+
+//===============================================================================|
+void NeoConnection::Encode_Pull()
+{
     BoltMessage pull(BoltValue(
         BOLT_PULL, {
             {mp("n", -1), mp("qid",-1)}
     }));
     encoder.Encode(pull);
-    BoltValue::Free_Bolt_Value(pull.msg);
-    Flush();
-
-    return 0;
-} // end Run_Query
+} // end Send_Pull
 
 
 //===============================================================================|
 int NeoConnection::Fetch(BoltMessage& out)
 {
-    Wait_Until(BoltState::Streaming);
     if (Get_State() != BoltState::Streaming)
         return 0;
-     
-    decoder.Decode(out, read_buf.Read_Ptr());
     
+    BoltQueryStateInfo temp;
+    
+    // int skip = decoder.Decode(temp.cursor, out);
+    // temp.cursor += skip;
+
+    // if (out.msg.struct_val.tag == BOLT_SUCCESS)
+    // {
+    //     Set_State(BoltState::Ready);
+    //     query_info.Dequeue();
+    //     if (query_info.Is_Empty())
+    //         read_buf.Reset();
+    //     return 0;
+    // } // end if
+
+    return 0;
+} // end Fetch
+
+
+//===============================================================================|
+int NeoConnection::Fetch_Sync(BoltMessage& out)
+{
+    BoltState s = Get_State();
+    if (s != BoltState::Streaming && s != BoltState::Run)
+        return 0;
+    
+    if (is_chunked || has_more || num_queries > 0)
+    {
+        Poll_Readable();
+        is_chunked = false;
+    }
+
+    // Dump_Hex((const char*)view.cursor, view.size);
+
+    u8* temp = view.cursor;  // save it 
+    int skip = decoder.Decode(view.cursor, out);
+    view.cursor += skip;
+    view.offset += skip;
+
     if (out.msg.struct_val.tag == BOLT_SUCCESS)
     {
-        Set_State(BoltState::Ready);
-        read_buf.Reset();
+        int ret = Success_Record(temp, view.size - view.offset);
+        num_queries--;
         return 0;
     } // end if
+    
+    if (view.offset >= view.size)
+        has_more = true;
+
 
     return 1;
 } // end Fetch
 
 
 //===============================================================================|
-void NeoConnection::Wait_Until(BoltState desired)
-{
-    BoltState prev = Get_State();
-    while (prev != desired)
-    {
-        state.wait(prev);
-        prev = Get_State();
-    } // end while
-    
-    // const auto deadline = std::chrono::steady_clock::now() + 
-    //     std::chrono::seconds(3);
-    // while (true)
-    // {
-    //     BoltState s = Get_State();
-    //     if (s == desired)
-    //         break;
-
-        
-    //     if (s == BoltState::Disconnected || s == BoltState::Error)
-    //         Fatal("connection failed before reaching desired state: %s", State_ToString().c_str());
-
-    //     if (std::chrono::steady_clock::now() > deadline)
-    //         Fatal("timeout waiting for desired state");
-
-    //     std::this_thread::yield();
-    // }
-}
-
-
-//===============================================================================|
 BoltState NeoConnection::Get_State() const
 {
-    return state.load(std::memory_order_acquire);
+    return state;
 } // end Get_State
 
 
 //===============================================================================|
 void NeoConnection::Set_State(BoltState s)
 {
-    state.store(s, std::memory_order_release);
-    state.notify_all();
+    state = s;
 } // end Set_State
 
 
@@ -262,25 +306,27 @@ void NeoConnection::Run_Write(std::shared_ptr<BoltRequest> req)
  */
 void NeoConnection::Poll_Readable()
 {
-    while (read_buf.Writable_Size() > 0)
+    while (read_buf.Writable_Size() > 0 && has_more)
     {
         ssize_t n = Recv(read_buf.Write_Ptr(), read_buf.Writable_Size());
-
         if (n <= 0)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-            Close_Driver();
-            return;
+            if (n == 0 || errno == EINTR)
+                break;
+            else 
+            {
+                Close_Driver();
+                return;
+            } // end else
         } // end if
 
-        read_buf.Advance(n);
 
         // if data is completely received push to response handler
-        DecoderTask task{this, read_buf.Read_Ptr(), static_cast<size_t>(n)};
-        ((CentralDispatcher*)pdispatcher)->Submit_Response(
-            std::make_shared<DecoderTask>(task)
-        );
-    } // end if
+        // Dump_Hex((const char*)read_buf.Read_Ptr(), n);
+        Decode_Response(read_buf.Read_Ptr(), n);
+        read_buf.Consume(n);
+        read_buf.Advance(n);
+    } // end while
 } // end Poll_Readable
 
 
@@ -291,44 +337,43 @@ void NeoConnection::Poll_Readable()
  */
 void NeoConnection::Decode_Response(u8* view, const size_t bytes)
 {
-    if ( bytes == 0 || !(0xB0 & *(view + 2)))
+    if (bytes == 0)
         return;
     
     size_t skip = 0;
-    // Dump_Hex((const char*)view, bytes);
-
-    u8 tag = *(view + 3);   
-    BoltMessage msg;
-    BoltQInfo info;
-
-    auto next_info = qinfo.Dequeue();
-    if (next_info.has_value())
-        info = next_info.value();
-    else 
-        return;     // may be out of sync so just drop it
-
-    switch (tag)
+    while (skip < bytes)
     {
-    case BOLT_SUCCESS:
-        skip += (this->*success_handler[static_cast<u8>(info.state)])(view, bytes, info.Callback);
-        break;
+        Dump_Hex((const char*)view, bytes);
+        if (!(0xB0 & *(view + 2)))
+            return;
 
-    case BOLT_FAILURE: 
-        decoder.Decode(msg);
-        Print("bolt failed: %s", msg.ToString().c_str());
-        read_buf.Reset();
-        break;
+        u8 s = static_cast<u8>(Get_State());
+        u8 tag = *(view + 3); 
+        // printf("bytes = %d -- skip = %d -- tag = %02x\n", bytes, skip, tag);
+        switch (tag)
+        {
+        case BOLT_SUCCESS:
+            skip += (this->*success_handler[s])(view, bytes);
+            break;
 
-    case BOLT_RECORD:
-        skip += Success_Record(view, bytes, info.Callback);
-        break;
+        case BOLT_FAILURE: 
+            Print("bolt failed");
+            skip = bytes;
+            read_buf.Reset();
+            break;
 
-    default:
-        Print("What is this?");
-        decoder.Decode(msg);
-        Print("bolt unk: %s", msg.ToString().c_str());
-        read_buf.Reset();
-    } // end switch
+        case BOLT_RECORD:
+            skip += Success_Pull(view, bytes);
+            break;
+
+        default:
+            Print("What is this?");
+            skip = bytes;
+            read_buf.Reset();
+        } // end switch
+
+        view += skip;
+    } // end while
 } // end Decode_Response
 
 
@@ -405,41 +450,36 @@ int NeoConnection::Negotiate_Version()
 //===============================================================================|
 int NeoConnection::Send_Hellov5(bool logon)
 {
+    BoltMessage hello;
     if (!logon)
-    {
+    {      
+        hello = (BoltValue(
+            BOLT_HELLO, {{
+                mp("user_agent", ("LightningBolt/v" + std::to_string(client_id+1) + ".0").c_str())
+            }}
+        ));
+
         hello_count = 1;
-        isVersion5 = true;
-        
-        BoltValue hello(BOLT_HELLO, {{
-            mp("user_agent", "LightningBolt/v1.0.0")
-        }});
-        BoltMessage msg(hello);
-        BoltValue::Free_Bolt_Value(hello);
-        encoder.Encode(msg);
+        is_version5 = true;  
     } // end if first log
     else 
     {
-        hello_count = 2;
-        ((CentralDispatcher*)pdispatcher)->Add_Ref();
-        qinfo.Enqueue({-1, BoltState::Connecting, nullptr});
-
         std::string uagent{("LightningBolt/" + std::to_string(client_id+1) +".0").c_str()};
         const char* username{user_auth[0].c_str()};
         const char* pwd{user_auth[1].c_str()};
 
-        BoltMessage log(BoltValue(BOLT_LOGON, {{
+        hello = (BoltValue(BOLT_LOGON, {{
             mp("user_agent", uagent.c_str()),
             mp("scheme", "basic"),
             mp("principal", username),
             mp("credentials", pwd)
         }}));
-        encoder.Encode(log);
-        BoltValue::Free_Bolt_Value(log.msg);
+
+        hello_count = 2;
     } // end else
 
-    // Dump_Hex((const char*)write_buf.Data(), write_buf.Size());
+    encoder.Encode(hello);
     Flush();
-
     return 0;
 } // end Send_Hello
 
@@ -458,8 +498,6 @@ int NeoConnection::Send_Hellov5(bool logon)
  */
 int NeoConnection::Send_Hellov4(bool logon)
 {
-    hello_count = 0;
-    isVersion5 = false;
     std::string uagent{("LightningBolt/" + std::to_string(client_id+1) +".0").c_str()};
     const char* username{user_auth[0].c_str()};
     const char* pwd{user_auth[1].c_str()};
@@ -473,19 +511,13 @@ int NeoConnection::Send_Hellov4(bool logon)
         })
     }));
     encoder.Encode(hello);
-    BoltValue::Free_Bolt_Value(hello.msg);
+
+    hello_count = 0;
+    is_version5 = false;
 
     Flush();
     return 0;
 } // end Send_Hello
-
-
-// //===============================================================================|
-// void NeoConnection::Send_Pull()
-// {
-
-// } // end Send_Pull
-
 
 
 // //===============================================================================|
@@ -592,8 +624,8 @@ std::string NeoConnection::Dump_Msg() const
 std::string NeoConnection::State_ToString() const
 { 
     static std::string states[DRIVER_STATES]{
-        "Connecting", "Ready", "Run", 
-        "Streaming", "Error", "Disconnected"
+        "Disconnected", "Connecting", "Ready", "Run", 
+        "Streaming", "Trx" "BufferFull", "Error"
     };
 
     u8 s = static_cast<u8>(Get_State());
@@ -609,14 +641,15 @@ u64 NeoConnection::Client_ID() const
 
 
 //===============================================================================|
-int NeoConnection::Dummy(u8* view, const size_t bytes,
-    std::function<void(NeoConnection*)> callback)
+int NeoConnection::Dummy(u8* view, const size_t bytes)
 {
     // ignore
-    BoltMessage unk;
-    decoder.Decode(view, unk);
+    // BoltMessage unk;
 
-    Print("Error: %s", unk.ToString().c_str());
+    // if (pipelines.Size() > qid)
+    //     decoder.Decode(active_queries[qid].cursor, unk);
+
+    // sPrint("Error: %s", unk.ToString().c_str());
     Print("Error: %s", State_ToString().c_str());
 
     return -1;
@@ -635,77 +668,65 @@ int NeoConnection::Dummy(u8* view, const size_t bytes,
  * @param view start of address to decode from
  * @param bytes length of the recvd data
  */
-int NeoConnection::Success_Hello(u8* view, const size_t bytes, 
-    std::function<void(NeoConnection*)> callback)
+int NeoConnection::Success_Hello(u8* view, const size_t bytes)
 {
-    BoltMessage hello_rsp;
-    int skip = decoder.Decode(view, hello_rsp);
-
-    // printf("%s\n", hello_rsp.ToString().c_str());
-    if (hello_count <= 1)
+    Set_State(BoltState::Ready);
+    if (is_version5 && hello_count <= 1)
     {
-        connection_id = hello_rsp.msg(0)["connection_id"].ToString();
-        neo_timeout = atoi(((hello_rsp.msg(0)["hints"])
-            ["connection.recv_timeout_seconds"]).ToString().c_str());
-    } // end if count logon or hello v4
-
-    if (isVersion5 && hello_count <= 1)
-    {
+        Set_State(BoltState::Connecting);
         Send_Hellov5(true);     // log on the server
-        return skip;
+        return bytes;
     } // end if
     
-    Set_State(BoltState::Ready);
+    has_more = false;
     read_buf.Reset();
-    return skip;
+    return bytes;
 } // end Success_Hello
 
 
 //===============================================================================|
-int NeoConnection::Success_Run(u8* view, const size_t bytes, 
-    std::function<void(NeoConnection*)> callback)
+/**
+ * @brief
+ */
+int NeoConnection::Success_Run(u8* cursor, const size_t bytes)
 {
-    BoltMessage msg;
-
-    //Dump_Hex((const char*)view, bytes);
-    int skip = decoder.Decode(msg, view);
-    
+    Set_State(BoltState::Streaming);
+    int skip = decoder.Decode(cursor, view.field_names);
     if (skip < bytes)
     {
-        skip += Success_Record(view + skip, bytes - skip, callback);
-        return skip;
-    } // end 
+        skip = bytes - skip;
+        is_chunked = true;
+    } // end if
 
-    qinfo.Enqueue({-1, BoltState::Streaming, callback});
+    has_more = true;
     return skip;
 } // end Success_Run
 
 
 //===============================================================================|
-int NeoConnection::Success_Record(u8* view, const size_t bytes,
-    std::function<void(NeoConnection*)> callback)
+int NeoConnection::Success_Pull(u8* cursor, const size_t bytes)
 {
     Set_State(BoltState::Streaming);
+    // Dump_Hex((const char*)cursor, bytes);
 
-    // Dump_Hex((const char*)view, bytes);
-    if (callback)
-    {
-        callback(this);
-    } // end if callback
+    view.cursor = cursor;
+    view.size = bytes;
+    view.offset = 0;
 
-    return 0;
+    has_more = false;   // persume we're done.
+    return bytes;
 } // end Success_Record
 
 
 //===============================================================================|
-// int NeoConnection::Success_Record(u8* view, const size_t bytes)
-// {
-//     //Next_State();
-//     Print("Inside Record");
-//     // if (val.struct_val.tag == BOLT_SUCCESS)
-//     // {
-//     //     Set_State(BoltState::Ready);
-//     //     return;
-//     // }
-//     return 0;
-// } // end Success_Record
+int NeoConnection::Success_Record(u8* cursor, const size_t bytes)
+{
+    Set_State(BoltState::Ready);
+    int skip = decoder.Decode(cursor, view.summary_meta);
+
+    // Print("%s", view.summary_meta.ToString().c_str());
+
+    has_more = false;
+    read_buf.Reset();
+    return skip;
+} // end Success_Record

@@ -39,6 +39,7 @@ struct BoltMessage
     BoltMessage() = default;
     //BoltMessage(BoltValue &val) : msg(val) {}
     BoltMessage(BoltValue val) : msg(val) {}
+    ~BoltMessage() = default;
 
     std::string ToString() const
     {

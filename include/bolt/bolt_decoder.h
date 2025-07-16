@@ -117,9 +117,6 @@ public:
         if (*(u16*)(pos) == 0x00)
             consumed += 2;
 
-        buf.Consume(consumed);    
-        // printf("> Inside decoder: %s\n", msg.ToString().c_str());
-        // Dump_Hex((const char*)buf.Data(), msg.chunk_size+4);
         return consumed;
     } // end Decode overloaded
 

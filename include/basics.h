@@ -74,6 +74,7 @@
 
 #else
 #include <sys/socket.h>
+#include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -200,7 +201,7 @@ constexpr bool is_big_endian =
 #define SWAP_ENDIAN_DOUBLE(val) {uint8_t *p = (uint8_t*)&val; std::reverse(p, p+sizeof(double)); val;}
 
 // generic byte swap helpers
-template<typename T> inline T byte_swap(T val);
+template<typename T> inline T byte_swap(T val) { return val; }
 template<> inline std::uint16_t byte_swap(std::uint16_t v) { return ntohs(v); }
 template<> inline std::uint32_t byte_swap(std::uint32_t v) { return ntohl(v); }
 template<> inline std::uint64_t byte_swap(std::uint64_t v) { return ntohll(v); }

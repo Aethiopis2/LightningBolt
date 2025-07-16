@@ -392,7 +392,10 @@ struct BoltValue
     /**
      * @brief destructor
      */
-    ~BoltValue() = default;
+    // ~BoltValue()
+    // {
+    //     Free_Bolt_Value(*this);
+    // }
 
 
     // BoltValue* operator=(const BoltValue& other)
@@ -735,14 +738,16 @@ struct BoltValue
         type = BoltType::Int;
         if constexpr (is_big_endian) 
         {
-            T tmp;
-            iCpy(&tmp, ptr, sizeof(T));
-            tmp = byte_swap<T>(tmp); 
-            int_val = tmp;
+            int_val = *((T*)ptr);
+            // T tmp;
+            // iCpy(&tmp, ptr, sizeof(T));
+            // tmp = byte_swap<T>(tmp); 
+            // int_val = tmp;
         } // end if byte
         else 
         {
             int_val = *((T*)ptr);
+            int_val = byte_swap<T>(int_val);
         } // end else little
     } // end Set_Int_RawDirect
 

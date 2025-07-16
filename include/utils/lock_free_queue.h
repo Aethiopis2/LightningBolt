@@ -84,7 +84,24 @@ public:
         return item;
     } // end Dequeue
 
-    
+    std::optional<std::reference_wrapper<T>> Front()
+    {
+        size_t pos = head.load(std::memory_order_relaxed);
+        if (!buffer[pos].full.load(std::memory_order_acquire))
+            return std:: nullopt;
+        
+        return std::ref(buffer[pos].value);
+    } // end front
+
+    std::optional<T> operator[](const size_t index)
+    {
+        if (!buffer[index].full.load(std::memory_order_acquire))
+            return std:: nullopt;
+
+        return buffer[index].value;
+    } // end operator[]
+
+
     bool Is_Empty() const 
     {
         return head.load(std::memory_order_relaxed) == tail.load(std::memory_order_relaxed);

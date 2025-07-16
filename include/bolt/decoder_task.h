@@ -18,12 +18,13 @@
 #include "connection/neoconnection.h"
 
 
-class NeoConnection;
-
 
 //===============================================================================|
 //         CLASS
 //===============================================================================|
+class NeoConnection;
+
+
 struct DecoderTask
 {
     NeoConnection* conn;

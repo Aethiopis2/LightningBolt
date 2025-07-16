@@ -407,7 +407,7 @@ const DecodeFn jump_table[256] = {
     &Decode_Struct, &Decode_Struct, &Decode_Struct, &Decode_Struct, &Decode_Struct, &Decode_Struct, &Decode_Struct, &Decode_Struct,             /* 184 - 191 */
     &Decode_Null, &Decode_Float, &Decode_False, &Decode_True, &UnImp, &UnImp, &UnImp, &UnImp,             /* 192 - 199 */
 
-    &Decode_Int<s8>, &Decode_Int<s16>, &Decode_Int<s32>, &Decode_Int<s64>, &Decode_Bytes<u8>, &Decode_Bytes<u16>, &Decode_Bytes<u32>, &UnImp,             /* 200 - 207 */
+    &Decode_Int<u8>, &Decode_Int<u16>, &Decode_Int<u32>, &Decode_Int<u64>, &Decode_Bytes<u8>, &Decode_Bytes<u16>, &Decode_Bytes<u32>, &UnImp,             /* 200 - 207 */
     &Decode_String<u8>, &Decode_String<u16>, &Decode_String<u32>, &UnImp, &Decode_List<u8>, &Decode_List<u16>, &Decode_List<u32>, &UnImp,             /* 208 - 215 */
     &Decode_Map<u8>, &Decode_Map<u16>, &Decode_Map<u32>, &UnImp, &UnImp, &UnImp, &UnImp, &UnImp,             /* 216 - 223 */
     &UnImp, &UnImp, &UnImp, &UnImp, &UnImp, &UnImp, &UnImp, &UnImp,             /* 224 - 231 */
