@@ -41,8 +41,11 @@ constexpr u32 ARENA_SIZE = 16'368;      // size of the fast growing buffer
 //          TYPES
 //===============================================================================|
 /**
- * @brief this structure provides ulta-high speed in cache memory for decoding 
- *   bolt encoded responses from neo4j server.
+ * @brief A scratch buffer that is used to store BoltValues temporarily
+ *  for fast access and encoding.
+ * 
+ * @tparam T the type of data to store in the buffer
+ * @tparam N the size of the buffer
  */
 template<typename T, size_t N>
 struct ScratchBuffer
@@ -50,31 +53,68 @@ struct ScratchBuffer
     alignas(64) T data[N];
     size_t size = 0;
 
-    T *Data() { return data; }
-    const T *Data() const { return data; }
+
+    /**
+     * @brief Get's memory from the buffer as long as count fits within
+     *  the size boundary if not returns 0.
+     * 
+     * @param count the count of items space to reserve
+     */
+    size_t Alloc(const size_t count)
+    {
+        if (count == 0 || count + size > N)
+            return size_t(-1);  // can't allocate more than the buffer size
+        
+        size_t offset = size;
+        size += count;
+        return offset;
+    } // end Alloc
+
 
     /**
      * @brief Get's memory from the buffer as long as count fits within
      *  the size boundary if not returns nullptr.
      * 
-     * @param count the count of items space to reserve
+     * @param offset the offset to get the data from
      */
-    T *Alloc(const size_t count)
+    T* Get(const size_t offset)
     {
-        if (N <= count + size)
-            return nullptr;
-        
-        T *ptr = data + size;
-        size += count;
-        return ptr;
-    } // end Alloc
+        if (offset >= N)
+            return nullptr;  // out of bounds
 
+        return data + offset;
+    } // end Get
+
+
+    /**
+     * @brief Get's memory from the buffer as long as count fits within
+     *  the size boundary if not returns 0.
+     * 
+     * @param offset the offset to get the data from
+     */
+    const T* Get(const size_t offset) const
+    {
+        if (offset >= N)
+            return nullptr;  // out of bounds
+
+        return data + offset;
+    } // end Get
+
+
+    /**
+     * @brief Resets the buffer size to 0.
+     */
     void Reset() { size = 0; }
+
+
+    /**
+     * @brief Releases the specified number of items from the buffer.
+     * 
+     * @param count the number of items to release
+     */
     void Release(const size_t count)
     {
-        size -= count;
-        if (size < 0)
-            size = 0;
+        size = (count > size) ? 0 : size - count;
     } // end Release
 };
 
@@ -92,6 +132,7 @@ struct ArenaAllocator
     size_t used = 0;
     size_t capacity = 0;
 
+
     /**
      * @brief constructor allocate's the arena buffer safe. Large enough for 
      *  most cases; even scratch was delibertaly made large to maximize gain
@@ -99,8 +140,15 @@ struct ArenaAllocator
     ArenaAllocator(const size_t initial_size = ARENA_SIZE)
     {
         data = (T*)malloc(sizeof(T) * initial_size);
+        if (!data) 
+        {
+            std::runtime_error("Failed to allocate memory for ArenaAllocator");
+            return;
+        } // end if failed
+
         capacity = initial_size;
     } // end contr
+
 
     /**
      * @brief destroyer
@@ -110,7 +158,10 @@ struct ArenaAllocator
         if (data)
             free(data);
         data = nullptr;     // double-tap
+        used = 0;
+        capacity = 0;
     } // end destroyer
+
 
     /**
      * @brief Allocate's memory for bolt value's from a pre-allocated 
@@ -118,14 +169,17 @@ struct ArenaAllocator
      * 
      * @param count the number of spaces to reserve in BoltValue objects
      */
-    T *Alloc(const size_t count)
+    size_t Alloc(const size_t count)
     {
+        if (count == 0)
+            return size_t(-1);  // can't allocate more than the buffer size
+
         while (used + count > capacity)
             Grow(std::max(used + count, capacity * 2));
 
-        T *ptr = data + used;
+        size_t offset = used;
         used += count;
-        return ptr;
+        return offset;
     } // end Alloc
 
     
@@ -135,104 +189,204 @@ struct ArenaAllocator
      * 
      * @param cap the new capacity to set (resize)
      */
-    void Grow(const size_t cap)
+    void Grow(const size_t new_cap)
     {
-        T* new_data = (T*)realloc(data, sizeof(T) * cap);
-        if (new_data) 
+        T* new_data = static_cast<T*>(realloc(data, sizeof(T) * new_cap));
+        if (!new_data) 
         {
-            data = new_data;
-            capacity = cap;
-        } 
-        else 
-        {
-            // Handle allocation failure
-            std::cout << "can't grow to " << cap << " from " << capacity << std::endl;
-        }
+            std::runtime_error("Failed to grow ArenaAllocator");
+            return;
+        } // end if failed
 
+        data = new_data;
+        capacity = new_cap;
     } // end Grow
 
+
+    /**
+     * @brief Resets the arena allocator to its initial state.
+     */
     void Reset() { used = 0; }
+
+
+    /**
+     * @brief Releases the specified number of items from the arena.
+     * 
+     * @param count the number of items to release
+     */
     void Release(const size_t count)
     {
-        used -= count;
-        if (used < 0)
-            used = 0;
+        used = (count > used) ? 0 : used - count;
     } // end Release
+
+
+    /**
+     * @brief Get's memory from the buffer as long as count fits within
+     *  the size boundary if not returns nullptr.
+     * 
+     * @param offset the offset to get the data from
+     */
+    T* Get(const size_t offset)
+    {
+        if (offset >= capacity)
+            return nullptr;  // out of bounds
+
+        return data + offset;
+    } // end Get
+
+
+    /**
+     * @brief Get's memory from the buffer as long as count fits within
+     *  the size boundary if not returns nullptr.
+     * 
+     * @param offset the offset to get the data from
+     */
+    const T* Get(const size_t offset) const
+    {
+        if (offset >= capacity)
+            return nullptr;  // out of bounds
+
+        return data + offset;
+    } // end Get
 };
 
 
 //===============================================================================|
+/**
+ * @brief A pool for BoltValues that uses a scratch buffer and an arena allocator
+ *  to manage memory efficiently.
+ * 
+ * @tparam T the type of data to store in the pool
+ */
 template<typename T>
 struct BoltPool
 {
-    enum class Source { Scratch, Arena };
+    struct Allocation 
+    {
+        size_t offset;  // global offset
+        size_t count;   // how many items were allocated
+    };
 
     ScratchBuffer<T, SCRATCH_SIZE> scratch;
     ArenaAllocator<T> arena;
-    std::vector<Source> allocation_log;  // keep a log of where allocations were made
+    std::vector<Allocation> allocation_log;
 
+
+    /**
+     * @brief Resets the pool, clearing all allocations and buffers.
+     */
     void Reset_All() 
     {
         scratch.Reset();
         arena.Reset();
+        allocation_log.clear();
     } // end Reset_All
 
 
-    void Grow_Arena(size_t n) 
+    /**
+     * @brief Allocates count elements. Returns global offset.
+     */
+    size_t Alloc(size_t count) 
     {
-        arena.Grow(n);
-    } // end Grow_Area
-
-
-    T* Alloc(size_t count) {
-        if (count == 0) return nullptr;
+        if (count == 0) return size_t(-1);
 
         size_t scratch_available = SCRATCH_SIZE - scratch.size;
+        size_t offset = scratch.size;
 
         if (count <= scratch_available) 
         {
-            allocation_log.push_back(Source::Scratch);
-            return scratch.Alloc(count);
-        } // end  if scratch
+            // Fully in scratch
+            scratch.Alloc(count);
+            allocation_log.push_back({ offset, count });
+            return offset;
+        } // end if scratch available
 
-        // Allocate partially from scratch and the rest from arena
-        T* scratch_ptr = nullptr;
-        if (scratch_available > 0) 
-        {
-            scratch_ptr = scratch.Alloc(scratch_available);
-        } // end if scratch to the last drop
+        // Part in scratch, rest in arena
+        size_t used_from_scratch = scratch_available;
+        size_t used_from_arena = count - used_from_scratch;
 
-        T* arena_ptr = arena.Alloc(count - scratch_available);
+        // Scratch
+        if (used_from_scratch > 0)
+            scratch.Alloc(used_from_scratch);
 
-        // Optionally, copy combined allocation into a single continuous buffer in the arena if needed.
-        // For BoltValue this may not be required if we only need views/references.
-        (scratch_ptr) ? allocation_log.push_back(Source::Scratch) : 
-            allocation_log.push_back(Source::Arena);
-        return (scratch_ptr) ? scratch_ptr : arena_ptr;
-    } // end alloc
+        // Arena
+        size_t arena_local_offset = arena.Alloc(used_from_arena);
+        if (arena_local_offset == size_t(-1)) return size_t(-1);
 
-    void Release(const size_t count)
+        allocation_log.push_back({ offset, count });
+        return offset;
+    } // end Alloc
+
+
+    /**
+     * @brief Releases the most recent allocation (LIFO)
+     */
+    void Release() 
     {
         if (allocation_log.empty()) return;
 
-        Source last = allocation_log.back();
+        Allocation last = allocation_log.back();
         allocation_log.pop_back();
 
-        if (last == Source::Arena) 
+        size_t start = last.offset;
+        size_t count = last.count;
+
+        if (start + count <= SCRATCH_SIZE) 
         {
-            arena.Release(count);
-        } // end if
-        else {
+            // All in scratch
             scratch.Release(count);
+        } // end if
+        else if (start >= SCRATCH_SIZE) 
+        {
+            // All in arena
+            arena.Release(count);
+        } // end else if
+        else 
+        {
+            // Spans both
+            size_t used_in_scratch = SCRATCH_SIZE - start;
+            size_t used_in_arena  = count - used_in_scratch;
+            scratch.Release(used_in_scratch);
+            arena.Release(used_in_arena);
         } // end else
     } // end Release
+
+
+    /**
+     * @brief Returns raw pointer to element at a global offset.
+     */
+    T* Get(size_t global_offset) 
+    {
+        if (global_offset < SCRATCH_SIZE)
+            return scratch.Get(global_offset);
+        else
+            return arena.Get(global_offset - SCRATCH_SIZE);
+    } // end Get
+
+
+    /**
+     * @brief Returns raw pointer to element at a global offset.
+     */
+    const T* Get(size_t global_offset) const 
+    {
+        if (global_offset < SCRATCH_SIZE)
+            return scratch.Get(global_offset);
+        else
+            return arena.Get(global_offset - SCRATCH_SIZE);
+    } // end Get
 };
 
 
 //===============================================================================|
+/**
+ * @brief Get's a thread-local BoltPool instance for the specified type.
+ * 
+ * @tparam T the type of data to store in the pool
+ * @return BoltPool<T>* pointer to the thread-local BoltPool instance
+ */
 template<typename T>
-inline BoltPool<T>& GetBoltPool() 
+inline BoltPool<T>* GetBoltPool() 
 {
     thread_local BoltPool<T> pool_instance;
-    return pool_instance;
+    return &pool_instance;
 } // end BoltPool 

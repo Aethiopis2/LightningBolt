@@ -170,7 +170,7 @@ int NeoConnection::Run_Query(const char* cypher)
     BoltMessage run(
         BoltValue(BOLT_RUN, {
             cypher, 
-            BoltValue::Make_Map(), 
+            BoltValue::Make_Map(),
             BoltValue::Make_Map()
         })
     );  
@@ -253,6 +253,104 @@ int NeoConnection::Fetch_Sync(BoltMessage& out)
 
     return 1;
 } // end Fetch
+
+
+//===============================================================================|
+/**
+ * @brief Begins a transaction with the database, this is a manual transaction
+ *  that requires commit or rollback to finish.
+ * 
+ * @param options optional parameters for the transaction
+ * 
+ * @return 0 on success -1 on system error -2 on application error
+ */
+int NeoConnection::Begin_Transaction(const BoltValue& options)
+{
+    BoltState s = Get_State();
+    if (s != BoltState::Ready)
+    {
+        err_string = "invalid state: " + State_ToString();
+        return -2;  // app error
+    } // end if
+
+    BoltMessage begin(
+        BoltValue(BOLT_BEGIN, {
+            options
+        })
+    );
+    encoder.Encode(begin);
+    Flush();
+
+    Set_State(BoltState::Trx);
+
+    // wait for success
+    Poll_Readable();
+    return 0;
+} // end Begin_Transaction
+
+
+//===============================================================================|
+/**
+ * @brief Commits the current transaction, this is a manual transaction that
+ *  requires Begin_Transaction to start.
+ * 
+ * @param options optional parameters for the commit
+ * 
+ * @return 0 on success -1 on system error -2 on application error
+ */
+int NeoConnection::Commit_Transaction(const BoltValue& options)
+{
+    BoltState s = Get_State();
+    if (s != BoltState::Trx)
+    {
+        err_string = "invalid state: " + State_ToString();
+        return -2;  // app error
+    } // end if
+
+    BoltMessage commit(
+        BoltValue(BOLT_COMMIT, {
+            options
+        })
+    );
+    encoder.Encode(commit);
+    Flush();   
+
+    // wait for success
+    Poll_Readable();
+    return 0;
+} // end Commit_Transaction
+
+
+//===============================================================================|
+/**
+ * @brief Rolls back the current transaction, this is a manual transaction that
+ *  requires Begin_Transaction to start.
+ * 
+ * @param options optional parameters for the rollback
+ * 
+ * @return 0 on success -1 on system error -2 on application error
+ */
+int NeoConnection::Rollback_Transaction(const BoltValue& options)
+{
+    BoltState s = Get_State(); 
+    if (s != BoltState::Trx)
+    {
+        err_string = "invalid state: " + State_ToString();
+        return -2;  // app error
+    } // end if
+
+    BoltMessage rollback(
+        BoltValue(BOLT_ROLLBACK, {
+            options
+        })
+    );
+    encoder.Encode(rollback);
+    Flush();
+
+    // wait for success
+    Poll_Readable();
+    return 0;
+} // end Rollback_Transaction
 
 
 //===============================================================================|
@@ -343,7 +441,7 @@ void NeoConnection::Decode_Response(u8* view, const size_t bytes)
     size_t skip = 0;
     while (skip < bytes)
     {
-        Dump_Hex((const char*)view, bytes);
+        // Dump_Hex((const char*)view, bytes);
         if (!(0xB0 & *(view + 2)))
             return;
 
@@ -353,7 +451,7 @@ void NeoConnection::Decode_Response(u8* view, const size_t bytes)
         switch (tag)
         {
         case BOLT_SUCCESS:
-            skip += (this->*success_handler[s])(view, bytes);
+            skip = (this->*success_handler[s])(view, bytes);
             break;
 
         case BOLT_FAILURE: 
@@ -363,7 +461,7 @@ void NeoConnection::Decode_Response(u8* view, const size_t bytes)
             break;
 
         case BOLT_RECORD:
-            skip += Success_Pull(view, bytes);
+            skip = Success_Pull(view, bytes);
             break;
 
         default:
@@ -694,7 +792,7 @@ int NeoConnection::Success_Run(u8* cursor, const size_t bytes)
     int skip = decoder.Decode(cursor, view.field_names);
     if (skip < bytes)
     {
-        skip = bytes - skip;
+        // skip = bytes - skip;
         is_chunked = true;
     } // end if
 
@@ -724,7 +822,7 @@ int NeoConnection::Success_Record(u8* cursor, const size_t bytes)
     Set_State(BoltState::Ready);
     int skip = decoder.Decode(cursor, view.summary_meta);
 
-    // Print("%s", view.summary_meta.ToString().c_str());
+    //Print("%s", view.summary_meta.ToString().c_str());
 
     has_more = false;
     read_buf.Reset();

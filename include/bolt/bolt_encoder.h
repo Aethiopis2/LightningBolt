@@ -329,9 +329,10 @@ private:
             Write_Bits<u8>(static_cast<u8>(len));
         } // end else
 
+        auto* p = list.pool->Get(list.list_val.offset);
         for (int i{0}; i < len; i++) 
         {
-            Encode(list.list_val.list[i]);
+            Encode(p[i]);
         } // end for
     } // end for
 
@@ -362,10 +363,12 @@ private:
             Write_Bits<u32>(static_cast<u32>(count));
         }
 
+        auto* key = map.pool->Get(map.map_val.key_offset);
+        auto* value = map.pool->Get(map.map_val.value_offset);
         for (int i = 0; i < count; i++) 
         {
-            Encode(map.map_val.key[i]);    // key
-            Encode(map.map_val.value[i]);  // value
+            Encode(key[i]);    // key
+            Encode(value[i]);  // value
         } // end 
     } // end Encode_Map
     
@@ -380,9 +383,10 @@ private:
         Write_Bits<u8>((BOLT_STRUCT | static_cast<u8>(len)));
         Write_Bits<u8>(val.struct_val.tag);
 
+        auto* fields = val.pool->Get(val.struct_val.offset);
         for (int i = 0; i < len; i++)
         {
-            Encode(val.struct_val.fields[i]);
+            Encode(fields[i]);
         } // end for 
     } // end Encode_Struct
 
@@ -403,6 +407,7 @@ private:
 
         iCpy(start_addr - 2, (const u8*)&size, sizeof(u16));
         buf.Write((const u8*)&msg.padding, sizeof(u16));
+        //Dump_Hex((const char*)buf.Data(), buf.Size());
     } // end Encode_Message
 
 

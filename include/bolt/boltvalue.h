@@ -141,7 +141,7 @@ enum class BoltType : std::uint8_t
 struct BoltValue
 {
     BoltType type;
-    void* bolt_pool;
+    BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
     u8 padding[3];
 
     union 
@@ -166,7 +166,7 @@ struct BoltValue
         {
             union 
             {
-                BoltValue* list;  // used for encoding 
+                size_t offset;  // used for encoding 
                 u8* ptr;          // used for decoding
             };
             bool is_decoded;
@@ -175,9 +175,9 @@ struct BoltValue
         
         struct 
         { 
-            BoltValue* key;     // used for encoding
-            BoltValue* value;
-            u8* ptr;            // used for decoding
+            size_t key_offset;      // used for encoding
+            size_t value_offset;
+            u8* ptr;                // used for decoding
             bool is_decoded;
             size_t size;   
         } map_val;
@@ -187,7 +187,7 @@ struct BoltValue
             u8 tag;
             union 
             {
-                BoltValue* fields;  // during encoding
+                size_t offset;      // during encoding
                 u8* ptr;            // while decoding
             };
             bool is_decoded;
@@ -273,15 +273,16 @@ struct BoltValue
     BoltValue(std::initializer_list<BoltValue> init)
         : type(BoltType::List)
     {
-        auto& pool = GetBoltPool<BoltValue>();
+        pool = GetBoltPool<BoltValue>();
         list_val.size = init.size();
         list_val.is_decoded = false;
-        list_val.list = pool.Alloc(list_val.size);
+        list_val.offset = pool->Alloc(list_val.size);
 
         size_t i = 0;
         for (auto &v : init)
         {
-            list_val.list[i++] = v;
+            *(pool->Get(list_val.offset + i)) = v;
+            i++;
         } // end for
     } // end constructor
 
@@ -294,18 +295,19 @@ struct BoltValue
         : type(BoltType::Map)
     {
         size_t i = 0;
-        auto& pool = GetBoltPool<BoltValue>();
+        pool = GetBoltPool<BoltValue>();
 
         map_val.size = init.size();
         map_val.is_decoded = false;
-        BoltValue* mem = pool.Alloc(map_val.size << 1);
-        map_val.key = mem;
-        map_val.value = mem + map_val.size;
+        map_val.key_offset = pool->Alloc(map_val.size << 1);
+        map_val.value_offset = map_val.key_offset + map_val.size;
 
+        auto* key = pool->Get(map_val.key_offset);
+        auto* value = pool->Get(map_val.value_offset);
         for (auto& list : init)
         {
-            map_val.key[i] = BoltValue(list.first);
-            map_val.value[i++] = list.second;
+            key[i] = BoltValue(list.first);
+            value[i++] = list.second;
         } // end for 
     } // end initalizer
 
@@ -320,145 +322,34 @@ struct BoltValue
     BoltValue(u8 tag, std::initializer_list<BoltValue> init)
         :type(BoltType::Struct)
     {
-        auto& pool = GetBoltPool<BoltValue>();
+        pool = GetBoltPool<BoltValue>();
         struct_val.size = init.size();
         struct_val.is_decoded = false;
         struct_val.tag = tag;
-        struct_val.fields = pool.Alloc(struct_val.size);
+        struct_val.offset = pool->Alloc(struct_val.size);
 
         size_t i = 0;
+        auto *fields = pool->Get(struct_val.offset);
         for (auto &k : init)
-            struct_val.fields[i++] = k;
+            fields[i++] = k;
     } // end BoltValue
-
-    /**
-     * @brief
-     */
-    // BoltValue(const BoltValue& other)
-    // {
-    //     type = other.type;
-    //     if (other.type == BoltType::Bool)
-    //     {
-    //         bool_val = other.bool_val;
-    //     } // end if bool
-    //     else if (other.type == BoltType::Int)
-    //     {
-    //         int_val = other.int_val;
-    //     } // end else int
-    //     else if (other.type == BoltType::Float)
-    //     {
-    //         float_val = other.float_val;
-    //     } // end else float
-    //     else if (other.type == BoltType::String)
-    //     {
-    //         str_val.str = other.str_val.str;
-    //         str_val.length = other.str_val.length;
-    //     } // end else string  
-    //     else if (other.type == BoltType::Bytes)
-    //     {
-    //         byte_val.ptr = other.byte_val.ptr;
-    //         byte_val.size = other.byte_val.size;
-    //     } // end else bytes
-    //     else if (other.type == BoltType::List)
-    //     {
-    //         list_val.is_decoded = other.list_val.is_decoded;
-    //         list_val.list = other.list_val.list;
-    //         list_val.ptr = other.list_val.ptr;
-    //         list_val.size = other.list_val.size;
-    //     } // end else if list
-    //     else if (other.type == BoltType::Map)
-    //     {
-    //         map_val.is_decoded = other.map_val.is_decoded;
-    //         map_val.key = other.map_val.key;
-    //         map_val.value = other.map_val.value;
-    //         map_val.ptr = other.map_val.ptr;
-    //         map_val.size = other.map_val.size;
-    //     } // end else if map
-    //     else if (other.type == BoltType::Struct)
-    //     {
-    //         struct_val.is_decoded = other.struct_val.is_decoded;
-    //         struct_val.tag = other.struct_val.tag;
-    //         struct_val.fields = other.struct_val.fields;
-    //         struct_val.ptr = other.struct_val.ptr;
-    //         struct_val.size = other.struct_val.size;
-    //     } // end else if struct
-    //     else
-    //     {
-    //         type = BoltType::Null;  // persume null
-    //     } // end else null or unknown
-    // } // end BoltValue 
 
 
     /**
      * @brief destructor
      */
-    // ~BoltValue()
-    // {
-    //     Free_Bolt_Value(*this);
-    // }
+    ~BoltValue()
+    {
+        if (pool)
+            Free_Bolt_Value(*this);
+    } // end destructor
 
-
-    // BoltValue* operator=(const BoltValue& other)
-    // {
-    //     type = other.type;
-    //     if (other.type == BoltType::Bool)
-    //     {
-    //         bool_val = other.bool_val;
-    //     } // end if bool
-    //     else if (other.type == BoltType::Int)
-    //     {
-    //         int_val = other.int_val;
-    //     } // end else int
-    //     else if (other.type == BoltType::Float)
-    //     {
-    //         float_val = other.float_val;
-    //     } // end else float
-    //     else if (other.type == BoltType::String)
-    //     {
-    //         str_val.str = other.str_val.str;
-    //         str_val.length = other.str_val.length;
-    //     } // end else string  
-    //     else if (other.type == BoltType::Bytes)
-    //     {
-    //         byte_val.ptr = other.byte_val.ptr;
-    //         byte_val.size = other.byte_val.size;
-    //     } // end else bytes
-    //     else if (other.type == BoltType::List)
-    //     {
-    //         list_val.is_decoded = other.list_val.is_decoded;
-    //         list_val.list = other.list_val.list;
-    //         list_val.ptr = other.list_val.ptr;
-    //         list_val.size = other.list_val.size;
-    //     } // end else if list
-    //     else if (other.type == BoltType::Map)
-    //     {
-    //         map_val.is_decoded = other.map_val.is_decoded;
-    //         map_val.key = other.map_val.key;
-    //         map_val.value = other.map_val.value;
-    //         map_val.ptr = other.map_val.ptr;
-    //         map_val.size = other.map_val.size;
-    //     } // end else if map
-    //     else if (other.type == BoltType::Struct)
-    //     {
-    //         struct_val.is_decoded = other.struct_val.is_decoded;
-    //         struct_val.tag = other.struct_val.tag;
-    //         struct_val.fields = other.struct_val.fields;
-    //         struct_val.ptr = other.struct_val.ptr;
-    //         struct_val.size = other.struct_val.size;
-    //     } // end else if struct
-    //     else
-    //     {
-    //         type = BoltType::Null;  // persume null
-    //     } // end else null or unknown
-
-    //     return this;
-    // } // end BoltValue 
 
     BoltValue operator()(const size_t index)
     {
         size_t size;
         u8* ptr;
-        BoltValue* alias;
+        size_t offset;
         bool is_decoded;
 
         
@@ -466,14 +357,14 @@ struct BoltValue
         { 
             size = struct_val.size;
             ptr = struct_val.ptr;
-            alias = struct_val.fields;
+            offset = struct_val.offset;
             is_decoded = struct_val.is_decoded;
         } // end if
         else if (type == BoltType::List)
         {
             size = list_val.size;
             ptr = list_val.ptr;
-            alias = list_val.list;
+            offset = list_val.offset;
             is_decoded = struct_val.is_decoded;
         } // end else if
 
@@ -490,14 +381,27 @@ struct BoltValue
         } // end if decoded
         else 
         {
-            if (index < size)
+            if (pool)
+            {
+                BoltValue* alias = pool->Get(offset);
+                if (index >= size)
+                    return BoltValue::Make_Unknown();
+                
+                //std::cout << "alias: " << alias[index].ToString() << '\n';
                 return alias[index];
+            } // end if pool
+            
+            //std::cout << "No pool\n";
+            return BoltValue::Make_Unknown();
         } // end else
         
         return BoltValue::Make_Unknown();
     } // end operator
 
 
+    /**
+     * @brief operator overloading for map types
+     */
     BoltValue operator[](const char *key)
     {
         size_t length = strlen(key);
@@ -524,12 +428,15 @@ struct BoltValue
             } // end if is decoded
             else 
             {
+                auto* k = pool->Get(map_val.key_offset);
+                auto* v = pool->Get(map_val.value_offset);
+
                 for (size_t i = 0; i < map_val.size; i++)
                 {
-                    if (map_val.key[i].str_val.length == length && 
-                        !strncmp(map_val.key[i].str_val.str, key, length))
+                    if (k[i].str_val.length == length && 
+                        !strncmp(k[i].str_val.str, key, length))
                     {
-                        return map_val.value[i];
+                        return v[i];
                     } // end if
                 } // end for
             } // end else not
@@ -643,14 +550,21 @@ struct BoltValue
         return v;
     } // end Make_List
 
-    
+
+    /**
+     * @brief factory for hetero-lists (lazy decoding style)
+     *  with a size hint.
+     * 
+     * @param size the size of the list
+     */
     static BoltValue Make_List(const size_t size)
     {
         BoltValue v;
         v.type = BoltType::List;
+        v.pool = GetBoltPool<BoltValue>();
         v.list_val.is_decoded = false;
         v.list_val.size = size;
-        v.list_val.list = GetBoltPool<BoltValue>().Alloc(size);
+        v.list_val.offset = v.pool->Alloc(size);
         return v;
     } // end Make_List
 
@@ -659,11 +573,11 @@ struct BoltValue
     void Append_List(BoltValue &val)
     {
         //std::cout << current << '\n';
-        if (current < list_val.size)
-        {
-            list_val.list[current] = val;
-            ++current;
-        } // end if
+        // if (current < list_val.size)
+        // {
+        //     list_val.list[current] = val;
+        //     ++current;
+        // } // end if
     } // end Append_List
 
 
@@ -694,6 +608,8 @@ struct BoltValue
         v.map_val.is_decoded = false;
         v.map_val.ptr = nullptr;
         v.map_val.size = 0;
+        v.map_val.key_offset = 0;
+        v.map_val.value_offset = 0;
         return v;
     } // end Make_List
 
@@ -777,7 +693,11 @@ struct BoltValue
 
 
     /**
-     * @brief 
+     * @brief Converts a BoltValue null to a human-readable string representation.
+     *  The null value is represented as "null".
+     * 
+     * @param ptr Pointer to the BoltValue representing the null value.
+     * @return std::string representing the BoltValue null.
      */
     static std::string ToString_Null(const BoltValue *ptr)
     {
@@ -786,7 +706,11 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue boolean to a human-readable string representation.
+     *  The boolean is represented as "true" or "false".
+     * 
+     * @param ptr Pointer to the BoltValue representing the boolean.
+     * @return std::string representing the BoltValue boolean.
      */
     static std::string ToString_Bool(const BoltValue *ptr)
     {
@@ -795,7 +719,11 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue integer to a human-readable string representation.
+     *  The integer is represented as a decimal number.
+     * 
+     * @param ptr Pointer to the BoltValue representing the integer.
+     * @return std::string representing the BoltValue integer.
      */
     static std::string ToString_Int(const BoltValue *ptr)
     {
@@ -804,7 +732,11 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue float to a human-readable string representation.
+     *  The float is represented as a decimal number.
+     * 
+     * @param ptr Pointer to the BoltValue representing the float.
+     * @return std::string representing the BoltValue float.
      */
     static std::string ToString_Float(const BoltValue* ptr)
     {
@@ -813,7 +745,11 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue string to a human-readable string representation.
+     *  The string is represented as a quoted string.
+     * 
+     * @param ptr Pointer to the BoltValue representing the string.
+     * @return std::string representing the BoltValue string.
      */
     static std::string ToString_String(const BoltValue* ptr)
     {
@@ -824,8 +760,11 @@ struct BoltValue
 
 
     /**
-     * @brief convert's a BoltValue Byte type as comma sperated string 
-     *  list enclosed in square brackets, [].
+     * @brief Converts a BoltValue byte array to a human-readable string representation.
+     *  The byte array is represented as a comma-separated list of hexadecimal values enclosed in square brackets.
+     * 
+     * @param ptr Pointer to the BoltValue representing the byte array.
+     * @return std::string representing the BoltValue byte array.
      */
     static std::string ToString_Bytes(const BoltValue* ptr)
     {
@@ -844,11 +783,15 @@ struct BoltValue
         }
         stream << "]";
         return stream.str();
-    } // end Json_Bytes
+    } // end ToString_Bytes
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue list to a human-readable string representation.
+     *  The list is represented as a comma-separated list of values enclosed in square brackets.
+     * 
+     * @param pval Pointer to the BoltValue representing the list.
+     * @return std::string representing the BoltValue list.
      */
     static std::string ToString_List(const BoltValue *pval)
     {
@@ -858,9 +801,10 @@ struct BoltValue
         std::string s = "[";
         if (!pval->list_val.is_decoded) 
         {
+            auto* v = pval->pool->Get(pval->list_val.offset);
             for (size_t i = 0; i < pval->list_val.size; i++) 
             {
-                s += pval->list_val.list[i].ToString();
+                s += v[i].ToString();
                 if (i != pval->list_val.size - 1)
                     s += ",";
             } // end for
@@ -884,7 +828,11 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue map to a human-readable string representation.
+     *  The map is represented as a comma-separated list of key-value pairs enclosed in curly braces.
+     * 
+     * @param pval Pointer to the BoltValue representing the map.
+     * @return std::string representing the BoltValue map.
      */
     static std::string ToString_Map(const BoltValue *pval)
     {
@@ -908,10 +856,12 @@ struct BoltValue
         } // end if decoded
         else 
         {
+            auto* key = pval->pool->Get(pval->map_val.key_offset);
+            auto* value = pval->pool->Get(pval->map_val.value_offset);
             for (size_t i = 0; i < pval->map_val.size; i++) 
             {
-                s += pval->map_val.key[i].ToString() + ":" +
-                    pval->map_val.value[i].ToString();
+                s += key[i].ToString() + ":" +
+                    value[i].ToString();
                 if (i != pval->map_val.size - 1)
                     s += ",";
             } // end for
@@ -923,7 +873,11 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue struct to a human-readable string representation.
+     *  The struct is represented as a comma-separated list of fields enclosed in curly braces.
+     * 
+     * @param pval Pointer to the BoltValue representing the struct.
+     * @return std::string representing the BoltValue struct.
      */
     static std::string ToString_Struct(const BoltValue *pval)
     {
@@ -957,9 +911,10 @@ struct BoltValue
         } // end if decoded
         else 
         {
+            auto* fields = pval->pool->Get(pval->struct_val.offset);
             for (size_t i = 0; i < pval->struct_val.size; i++) 
             {
-                s += pval->struct_val.fields[i].ToString();
+                s += fields[i].ToString();
                 if (i != pval->struct_val.size - 1)
                     s += ",";
             } // end for
@@ -1010,28 +965,43 @@ struct BoltValue
     } // end ToString_Point2D
 
 
+    /**
+     * @brief
+     */
     static std::string ToString_Unk(const BoltValue *pval)
     {
         return "<?>";
     } // end Unk
 
 
+    /**
+     * @brief Converts the BoltValue to a human-readable string representation.
+     *  The actual string representation depends on the type of the value.
+     * 
+     * @return std::string representing the BoltValue.
+     */
     std::string ToString() const
     {
         return str_jump[static_cast<u8>(type)](this);
     } // end ToString
 
 
+    /**
+     * @brief Frees the BoltValue from the pool if it is not decoded.
+     *  This is used to release resources when the value is no longer needed.
+     * 
+     * @param val The BoltValue to free.
+     */
     static void Free_Bolt_Value(BoltValue& val) 
     {
-        if (val.type == BoltType::List && !val.list_val.is_decoded && val.list_val.list)
-            GetBoltPool<BoltValue>().Release(val.list_val.size);
+        if (val.type == BoltType::List && !val.list_val.is_decoded)
+            val.pool->Release();
 
-        else if (val.type == BoltType::Map && !val.map_val.is_decoded && val.map_val.key)
-            GetBoltPool<BoltValue>().Release(val.map_val.size << 1);
+        else if (val.type == BoltType::Map && !val.map_val.is_decoded)
+            val.pool->Release();
 
-        else if (val.type == BoltType::Struct && !val.struct_val.is_decoded && val.struct_val.fields)
-            GetBoltPool<BoltValue>().Release(val.struct_val.size);
+        else if (val.type == BoltType::Struct && !val.struct_val.is_decoded )
+            val.pool->Release();
     } // end FreeBoltValue
 
 

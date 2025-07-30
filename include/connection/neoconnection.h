@@ -104,6 +104,10 @@ public:
     int Fetch(BoltMessage& out);
     int Fetch_Sync(BoltMessage& out);
 
+    int Begin_Transaction(const BoltValue& options = BoltValue::Make_Map());
+    int Commit_Transaction(const BoltValue& options = BoltValue::Make_Map());
+    int Rollback_Transaction(const BoltValue& options = BoltValue::Make_Map());
+
     void Poll_Readable();
     void Poll_Writable();
     void Flush();

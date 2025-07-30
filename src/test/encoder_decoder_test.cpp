@@ -172,7 +172,7 @@ void Encode_Test(size_t iterations)
         }, iterations);
 
         PrintResult("List", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        // Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -200,7 +200,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(complexMap);
         }, iterations);
         PrintResult("Map", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        // Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
 
@@ -234,7 +234,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(bolt_struct);
         }, iterations);
         PrintResult("Struct", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        // Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
 
@@ -274,7 +274,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(msg);
         }, iterations);
         PrintResult("Message", avg_ns);        
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        // Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 } // end Encode_Test
 

@@ -23,68 +23,82 @@ using namespace std;
 
 
 
-CentralDispatcher g_dispatcher;
+//===============================================================================|
+//          GLOBALS
+//===============================================================================|
+const int NUM_TESTS = 4;
+
+struct Test
+{
+    const char* cypher[NUM_TESTS] = {
+        "RETURN 1",
+        "RETURN 1",
+        "UNWIND RANGE(1, 1000) AS r RETURN r",
+        "MATCH (n) RETURN n LIMIT 10        "
+    };
+    const int rounds[NUM_TESTS] = { 10, 1000, 100, 100 };
+    const char* spaces[NUM_TESTS] = {
+        "                            ",
+        "                            ",
+        " ",
+        "       "
+    };
+};
+
 std::vector<int64_t> durs;
+
+
+
 
 //===============================================================================|
 //          FUNCTIONS
 //===============================================================================|
-void Run_Test_Query(u64 client_id) {
-    auto start = std::chrono::high_resolution_clock::now();
-
-    BoltRequest req(
-        "MATCH (n) RETURN n LIMIT 10",
-        BoltRequest::QueryType::READ,
-        BoltValue::Make_Map(),
-        BoltValue::Make_Map(),
-        [client_id, start](NeoConnection* pconn) {
-            // std::cout << "Client " << client_id << " got response:\n";
-            BoltMessage out;
-            while (pconn->Fetch(out) > 0)
-                Print("%s", out.ToString().c_str());
-            
-            auto end = std::chrono::high_resolution_clock::now();
-            durs.push_back(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
-            return 0;
-        },
-        client_id
-    );
-    g_dispatcher.Submit_Request(std::move(std::make_shared<BoltRequest>(req)));
-}
-
-
 int main() 
 {
     Print_Title();
     
-    const int pool_size = 1;
-    const u64 num_query = 10;
+    Test test;
+    const size_t iterations = 10;
 
-    for (size_t i=0; i < 1; i++)
+    for (size_t i = 0; i < iterations; i++)
     {
         NeoConnection con(1, "localhost:7687@neo4j:mariam@tobby@melona");
         con.Start();
-        for (u64 i = 0; i < num_query; i++)
+        Test test;
+
+        for (size_t k = 0; k < NUM_TESTS; k++)
         {
-            auto start = std::chrono::high_resolution_clock::now();
-            con.Run_Query("RETURN 1");
+            for (u64 j = 0; j < test.rounds[k]; j++)
+            {
+                auto start = std::chrono::high_resolution_clock::now();
+                con.Run_Query(test.cypher[k]);
 
-            BoltMessage out;
-            while (con.Fetch_Sync(out) > 0);
-                // Print("%s", out.ToString().c_str());
+                BoltMessage out;
+                while (con.Fetch_Sync(out) > 0);
+                    // Print("%s", out.ToString().c_str());
 
-            auto end = std::chrono::high_resolution_clock::now();
-            durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
-        }
+                auto end = std::chrono::high_resolution_clock::now();
+                durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+            } // end nested for
+
+            if (!durs.empty()) 
+            {
+                int64_t total = std::accumulate(durs.begin(), durs.end(), int64_t{0});
+                int64_t avg = total / static_cast<int64_t>(durs.size());
+                Print("cypher: %s%s\truns: %dx\tAvg time: %lld µs", test.cypher[k],
+                    test.spaces[k], test.rounds[k], avg);
+            } // end if 
+            else 
+            {
+                Print("No durations recorded.");
+            } // end else
+
+            durs.clear();
+        } // end tests nested for
 
         con.Stop();
-    }
-    if (!durs.empty()) {
-        int64_t total = std::accumulate(durs.begin(), durs.end(), int64_t{0});
-        int64_t avg = total / static_cast<int64_t>(durs.size());
-        Print("Average duration: %lld ms", avg);
-    } else {
-        Print("No durations recorded.");
-    }
+        cout << endl;
+    } // end outer for
+
     Print("Terminated");
-}
+} // end main
