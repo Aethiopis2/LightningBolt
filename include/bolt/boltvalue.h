@@ -662,7 +662,7 @@ struct BoltValue
         } // end if byte
         else 
         {
-            int_val = *((T*)ptr);
+            iCpy(&int_val, ptr, sizeof(T));
             int_val = byte_swap<T>(int_val);
         } // end else little
     } // end Set_Int_RawDirect

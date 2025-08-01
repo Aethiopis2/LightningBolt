@@ -201,10 +201,14 @@ constexpr bool is_big_endian =
 #define SWAP_ENDIAN_DOUBLE(val) {uint8_t *p = (uint8_t*)&val; std::reverse(p, p+sizeof(double)); val;}
 
 // generic byte swap helpers
-template<typename T> inline T byte_swap(T val) { return val; }
-template<> inline std::uint16_t byte_swap(std::uint16_t v) { return ntohs(v); }
-template<> inline std::uint32_t byte_swap(std::uint32_t v) { return ntohl(v); }
-template<> inline std::uint64_t byte_swap(std::uint64_t v) { return ntohll(v); }
+template<typename T> inline T byte_swap(T val) 
+{ 
+    if constexpr (sizeof(T) == 1) return val; // no swap needed for 1 byte
+    else if constexpr (sizeof(T) == 2) return ntohs(val);
+    else if constexpr (sizeof(T) == 4) return ntohl(val);
+    else if constexpr (sizeof(T) == 8) return ntohll(val);
+    else static_assert(sizeof(T) == 0, "Unsupported type size for byte swap");
+} // end byte_swap
 template<> inline double byte_swap(double v) { return ntohll(v); }
 
 inline double swap_endian_double(double value) {
