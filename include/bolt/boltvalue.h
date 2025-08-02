@@ -888,15 +888,59 @@ struct BoltValue
         if (pval->struct_val.is_decoded) 
         {
             u8* ptr = pval->struct_val.ptr;
-            // if (pval->struct_val.tag == 0x4E)
-            // {
-            //     s += ToString_Node(ptr);
-            // } // end else if Node
-            // else if (pval->struct_val.tag == 0x58)
-            // {
-            //     s += ToString_Point2D(ptr);
-            // } // end else if Point2D
-            // else
+            if (pval->struct_val.tag == 0x4E)
+            {
+                s += ToString_Node(ptr);
+            } // end else if Node
+            else if (pval->struct_val.tag == 0x52)
+            {
+                s += ToString_Relationship(ptr);
+            } // end else if Relationship
+            else if (pval->struct_val.tag == 0x72)
+            {
+                s += ToString_Unbound_Relationship(ptr);
+            } // end else if UnboundRelationship
+            else if (pval->struct_val.tag == 0x50)
+            {
+                s += ToString_Path(ptr);
+            } // end else if Path
+            else if (pval->struct_val.tag == 0x44)
+            {
+                s += ToString_Date(ptr);
+            } // end else if Date
+            else if (pval->struct_val.tag == 0x54)
+            {
+                s += ToString_Time(ptr);
+            } // end else if Time
+            else if (pval->struct_val.tag == 0x74)
+            {
+                s += ToString_LocalTime(ptr);
+            } // end else if LocalTime
+            else if (pval->struct_val.tag == 0x49 || pval->struct_val.tag == 0x46)
+            {
+                s += ToString_DateTime(ptr);
+            } // end else if DateTime
+            else if (pval->struct_val.tag == 0x69 || pval->struct_val.tag == 0x66)
+            {
+                s += ToString_DateTimeTimeZoneId(ptr);
+            } // end else if DateTimeTimeZoneId
+            else if (pval->struct_val.tag == 0x64)
+            {
+                s += ToString_LocalDateTime(ptr);
+            } // end else if LocalDateTime
+            else if (pval->struct_val.tag == 0x45)
+            {
+                s += ToString_Duration(ptr);
+            } // end else if Duration
+            else if (pval->struct_val.tag == 0x58)
+            {
+                s += ToString_Point2D(ptr);
+            } // end else if Point2D
+            else if (pval->struct_val.tag == 0x59)
+            {
+                s += ToString_Point3D(ptr);
+            } // end else if Point3D
+            else
             {
                 for (size_t i = 0; i < pval->struct_val.size; i++) 
                 {
@@ -926,16 +970,21 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue Node to a human-readable string representation.
+     *  The Node is represented with its ID, labels, properties, and element ID.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Node.
+     * 
+     * @return std::string representing the BoltValue Node.
      */
     static std::string ToString_Node(u8*& ptr)
     {
+
         BoltValue temp_id, temp_lables, temp_props, temp_elemid;
         std::string s = "Node:{id:";
-        ptr += 2;   // bolt struct + point tags
 
-        jump_table[*ptr](ptr, temp_lables);     // node list of labels
         jump_table[*ptr](ptr, temp_id);         // the  node id
+        jump_table[*ptr](ptr, temp_lables);     // node list of labels
         jump_table[*ptr](ptr, temp_props);      // node poperties
         jump_table[*ptr](ptr, temp_elemid);     // node element id
 
@@ -947,13 +996,263 @@ struct BoltValue
 
 
     /**
-     * @brief
+     * @brief Converts a BoltValue Relationship to a human-readable string representation.
+     *  The Relationship is represented with its ID, start node ID, end node ID, type, properties,
+     *  element ID, and start/end node element IDs.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Relationship.
+     * 
+     * @return std::string representing the BoltValue Relationship.
+     */
+    static std::string ToString_Relationship(u8*& ptr)
+    {
+        BoltValue temp_id, temp_start, temp_end, temp_type, temp_props, temp_elemid,
+            temp_start_elemid, temp_end_elemid;
+
+        std::string s = "Relationship:{id:";
+
+        jump_table[*ptr](ptr, temp_id);         // the relationship id
+        jump_table[*ptr](ptr, temp_start);      // start node id
+        jump_table[*ptr](ptr, temp_end);        // end node id
+        jump_table[*ptr](ptr, temp_type);       // relationship type
+        jump_table[*ptr](ptr, temp_props);      // relationship properties
+        jump_table[*ptr](ptr, temp_elemid);     // relationship element id
+        jump_table[*ptr](ptr, temp_start_elemid); // start node element id
+        jump_table[*ptr](ptr, temp_end_elemid);   // end node element id
+
+        s += std::to_string(temp_id.int_val) + ",startNode:" +
+            std::to_string(temp_start.int_val) + ",endNode:" +
+            std::to_string(temp_end.int_val) + ",type:" +
+            temp_type.ToString() + ",Properties:" + 
+            temp_props.ToString() + ",element_id:" + 
+            temp_elemid.ToString() + 
+            ",startNodeElementId:" + temp_start_elemid.ToString() +
+            ",endNodeElementId:" + temp_end_elemid.ToString() + "}";
+        return s;
+    } // end ToString_Relationship
+
+
+    /**
+     * @brief Converts a BoltValue UnboundRelationship to a human-readable string representation.
+     *  The UnboundRelationship is represented with its ID, type, properties, and element ID.
+     * 
+     * @param ptr Pointer to the BoltValue representing the UnboundRelationship.
+     * 
+     * @return std::string representing the BoltValue UnboundRelationship.
+     */
+    static std::string ToString_Unbound_Relationship(u8*& ptr)
+    {
+        BoltValue temp_id, temp_type, temp_props, temp_elemid;
+        std::string s = "UnboundRelationship:{id:";
+
+        jump_table[*ptr](ptr, temp_id);         // the relationship id
+        jump_table[*ptr](ptr, temp_type);       // relationship type
+        jump_table[*ptr](ptr, temp_props);      // relationship properties
+        jump_table[*ptr](ptr, temp_elemid);     // relationship element id
+
+        s += std::to_string(temp_id.int_val) + ",type:" +
+            temp_type.ToString() + ",Properties:" + 
+            temp_props.ToString() + ",element_id:" + 
+            temp_elemid.ToString() + "}";
+        return s;
+    } // end ToString_Unbound_Relationship
+
+
+    /**
+     * @brief Converts a BoltValue Path to a human-readable string representation.
+     *  The Path is represented with its nodes, relationships, and indices.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Path.
+     * 
+     * @return std::string representing the BoltValue Path.
+     */
+    static std::string ToString_Path(u8*& ptr)
+    {
+        BoltValue temp_nodes, temp_rels, temp_index;
+        std::string s = "Path:{nodes:";
+
+        jump_table[*ptr](ptr, temp_nodes);      // nodes
+        jump_table[*ptr](ptr, temp_rels);       // relationships
+        jump_table[*ptr](ptr, temp_index);      // idices
+        
+
+        s += temp_nodes.ToString() + ",relationships:" +
+            temp_rels.ToString() + ",indices:" +
+            temp_index.ToString() + "}";
+        return s;
+    } // end ToString_Path
+
+
+    /**
+     * @brief Converts a BoltValue Date to a human-readable string representation.
+     *  The Date is represented with its days since epoch Jan 01 1970.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Date.
+     * 
+     * @return std::string representing the BoltValue Date.
+     */
+    static std::string ToString_Date(u8*& ptr)
+    {
+        BoltValue temp_day;
+        std::string s = "Date:{days:";
+
+        jump_table[*ptr](ptr, temp_day);        // day
+
+        s += std::to_string(temp_day.int_val) + "}";
+        return s;
+    } // end ToString_Date
+
+
+    /**
+     * @brief Converts a BoltValue Time to a human-readable string representation.
+     *  The Time is represented with its nanoseconds and timezone offset in seconds.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Time.
+     * 
+     * @return std::string representing the BoltValue Time.
+     */
+    static std::string ToString_Time(u8*& ptr)
+    {
+        BoltValue temp_nanosecond, temp_offset_second;
+        std::string s = "Time:{nanoseconds:";
+
+        jump_table[*ptr](ptr, temp_nanosecond);       // hour
+        jump_table[*ptr](ptr, temp_offset_second);     // minute
+
+        s += std::to_string(temp_nanosecond.int_val) + ",tz_offset_second:" +
+            std::to_string(temp_offset_second.int_val)  + "}";
+        return s;
+    } // end ToString_Time
+
+
+    /**
+     * @brief Converts a BoltValue LocalTime to a human-readable string representation.
+     *  The LocalTime is represented with its nanoseconds since midnight.
+     * 
+     * @param ptr Pointer to the BoltValue representing the LocalTime.
+     * 
+     * @return std::string representing the BoltValue LocalTime.
+     */
+    static std::string ToString_LocalTime(u8*& ptr)
+    {
+        BoltValue temp_nanosecond;
+        std::string s = "LocalTime:{nanoseconds:";
+
+        jump_table[*ptr](ptr, temp_nanosecond);       // hour
+
+        s += std::to_string(temp_nanosecond.int_val) + "}";
+        return s;
+    } // end ToString_LocalTime
+
+
+    /**
+     * @brief Converts a BoltValue DateTime to a human-readable string representation.
+     *  The DateTime is represented with its seconds since epoch, nanoseconds, and timezone offset in seconds.
+     * 
+     * @param ptr Pointer to the BoltValue representing the DateTime.
+     * 
+     * @return std::string representing the BoltValue DateTime.
+     */
+    static std::string ToString_DateTime(u8*& ptr)
+    {
+        BoltValue temp_seconds, temp_nanoseconds, temp_offset_seconds;
+        std::string s = "DateTime:{seconds:";
+
+        jump_table[*ptr](ptr, temp_seconds);            // date
+        jump_table[*ptr](ptr, temp_nanoseconds);        // time
+        jump_table[*ptr](ptr, temp_offset_seconds);     // time
+
+        s += temp_seconds.ToString() + ",nanoseconds:" + 
+            temp_nanoseconds.ToString() + ",tz_offset_seconds:" + 
+            temp_offset_seconds.ToString() + "}";
+        return s;
+    } // end ToString_DateTime
+
+
+    /**
+     * @brief Converts a BoltValue DateTimeTimeZoneId to a human-readable string representation.
+     *  The DateTimeTimeZoneId is represented with its seconds since epoch, nanoseconds, and timezone ID.
+     * 
+     * @param ptr Pointer to the BoltValue representing the DateTimeTimeZoneId.
+     * 
+     * @return std::string representing the BoltValue DateTimeTimeZoneId.
+     */
+    static std::string ToString_DateTimeTimeZoneId(u8*& ptr)
+    {
+        BoltValue temp_seconds, temp_nanoseconds, temp_id;
+        std::string s = "DateTime:{seconds:";
+
+        jump_table[*ptr](ptr, temp_seconds);            // date
+        jump_table[*ptr](ptr, temp_nanoseconds);        // time
+        jump_table[*ptr](ptr, temp_id);                 // id
+
+        s += temp_seconds.ToString() + ",nanoseconds:" + 
+            temp_nanoseconds.ToString() + ",tz_id:" + 
+            temp_id.ToString() + "}";
+        return s;
+    } // end ToString_DateTimeTimeZoneId
+
+
+    /**
+     * @brief Converts a BoltValue LocalDateTime to a human-readable string representation.
+     *  The LocalDateTime is represented with its seconds since epoch and nanoseconds.
+     * 
+     * @param ptr Pointer to the BoltValue representing the LocalDateTime.
+     * 
+     * @return std::string representing the BoltValue LocalDateTime.
+     */
+    static std::string ToString_LocalDateTime(u8*& ptr)
+    {
+        BoltValue temp_seconds, temp_nanoseconds;
+        std::string s = "LocalDateTime:{seconds:";
+
+        jump_table[*ptr](ptr, temp_seconds);            // date
+        jump_table[*ptr](ptr, temp_nanoseconds);        // time
+
+        s += temp_seconds.ToString() + ",seconds:" + 
+            temp_nanoseconds.ToString() + "}";
+        return s;
+    } // end ToString_LocalDateTime
+
+
+    /**
+     * @brief Converts a BoltValue Duration to a human-readable string representation.
+     *  The Duration is represented with its months, days, seconds, and nanoseconds.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Duration.
+     * 
+     * @return std::string representing the BoltValue Duration.
+     */
+    static std::string ToString_Duration(u8*& ptr)
+    {
+        BoltValue temp_months, temp_days, temp_seconds, temp_nanoseconds;
+        std::string s = "Duration:{months:";
+
+        jump_table[*ptr](ptr, temp_months);            // months
+        jump_table[*ptr](ptr, temp_days);              // days
+        jump_table[*ptr](ptr, temp_seconds);           // seconds
+        jump_table[*ptr](ptr, temp_nanoseconds);       // nanoseconds
+
+        s += std::to_string(temp_months.int_val) + ",days:" +
+            std::to_string(temp_days.int_val) + ",seconds:" +
+            std::to_string(temp_seconds.int_val) + ",nanoseconds:" +
+            std::to_string(temp_nanoseconds.int_val) + "}";
+        return s;
+    } // end ToString_Duration
+
+
+    /**
+     * @brief Converts a BoltValue Point2D to a human-readable string representation.
+     *  The Point2D is represented with its SRID, x, and y coordinates.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Point2D.
+     * 
+     * @return std::string representing the BoltValue Point2D.
      */
     static std::string ToString_Point2D(u8*& ptr)
     {
         BoltValue tempi, tempx, tempy;
         std::string s = "Point2D:{srid:";
-        ptr += 2;   // bolt struct + point tags
 
         jump_table[*ptr](ptr, tempi);    // integer value
         jump_table[*ptr](ptr, tempx);    // float x value
@@ -963,6 +1262,31 @@ struct BoltValue
             tempx.ToString() + ",y:" + tempy.ToString() + "}";
         return s;
     } // end ToString_Point2D
+
+
+    /**
+     * @brief Converts a BoltValue Point3D to a human-readable string representation.
+     *  The Point3D is represented with its SRID, x, y, and z coordinates.
+     * 
+     * @param ptr Pointer to the BoltValue representing the Point3D.
+     * 
+     * @return std::string representing the BoltValue Point3D.
+     */
+    static std::string ToString_Point3D(u8*& ptr)
+    {
+        BoltValue tempi, tempx, tempy, tempz;
+        std::string s = "Point3D:{srid:";
+
+        jump_table[*ptr](ptr, tempi);    // integer value
+        jump_table[*ptr](ptr, tempx);    // float x value
+        jump_table[*ptr](ptr, tempy);    // float y value
+        jump_table[*ptr](ptr, tempz);    // float z value
+
+        s += std::to_string(static_cast<u32>(tempi.int_val)) + ",x:" +
+            tempx.ToString() + ",y:" + tempy.ToString() + ",z:" + tempz.ToString() + "}";
+        return s;
+    } // end ToString_Point3D
+
 
 
     /**

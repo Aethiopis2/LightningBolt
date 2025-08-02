@@ -58,11 +58,11 @@ int main()
     Print_Title();
     
     Test test;
-    const size_t iterations = 10;
+    const size_t iterations = 1;
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoConnection con(1, "http://localhost:7687:neo4j:password");
+        NeoConnection con(1, "localhost:7687@neo4j:mariam@tobby@melona");
         con.Start();
         Test test;
 
