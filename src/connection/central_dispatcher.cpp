@@ -46,7 +46,7 @@ void CentralDispatcher::Init(const std::string &connection_string,
     ref_count.store(0, std::memory_order_relaxed);
     for (size_t i = 0; i < connection_count; i++)
     {
-        auto conn = std::make_shared<NeoConnection>(i, connection_string);
+        auto conn = std::make_shared<NeoConnection>(connection_string, i);
         if (conn->Start() < 0)
         {
             Dump_Err("connect failed");

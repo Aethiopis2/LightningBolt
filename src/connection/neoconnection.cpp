@@ -28,16 +28,20 @@
 //          CLASS
 //===============================================================================|
 /**
- * @brief Parses the connection string only, makes it easy for object construction.
+ * @brief constructor for NeoConnection
+ * 
+ * @param con_string the connection string to connect to neo4j server
+ * @param cli_id the client id of this connection
+ * @param extras extra parameters for connection
  */
-NeoConnection::NeoConnection(const u64 cli_id, const std::string& con_string)
-    :encoder(write_buf), decoder(read_buf)
+NeoConnection::NeoConnection(const std::string& con_string, const u64 cli_id,
+    const BoltValue& extras)
+    :encoder(write_buf), decoder(read_buf), client_id(cli_id),
+    extra_connection_params(extras), state(BoltState::Disconnected)
 {
-    client_id = cli_id;
     is_version5 = false;
     current_qid = hello_count = supported_version = 0;
 
-    Set_State(BoltState::Disconnected);
     if (!Parse_Conn_String(con_string))
         Fatal("Invalid connection string: %s", con_string.c_str());
 } // end NeoConnection
@@ -55,7 +59,9 @@ NeoConnection::~NeoConnection()
 
 //===============================================================================|
 /**
- * @brief
+ * @brief checks if the connection is closed
+ * 
+ * @return true if closed, false otherwise
  */
 bool NeoConnection::Is_Closed() const
 {
@@ -75,22 +81,20 @@ bool NeoConnection::Is_Closed() const
  */
 int NeoConnection::Start()
 {
+    int ret;
     Set_State(BoltState::Connecting);
-    if (Connect() < 0)
+
+    if ( (ret = Connect()) < 0)
         return -1;
 
-    int ret;
     if ( (ret = Negotiate_Version()) < 0)
         return -1;
 
-    if (supported_version >= 261)         // use version 5 hello
+    if (supported_version >= 261)   // use version 5 hello
         hello = &NeoConnection::Send_Hellov5;
-    else                    // version 4 and below
+    else                            // version 4 and below
         hello = &NeoConnection::Send_Hellov4;
-     
-    // non-blocking socket
-    // if (Toggle_NonBlock() < 0)
-    //     return -1;
+        
     
     ret = (this->*hello)(false);
     if (ret < 0)

@@ -267,13 +267,36 @@ struct BoltValue
 
 
     /**
+     * @brief
+     */
+    BoltValue(std::pair<const char*, BoltValue> v)
+        : type(BoltType::Map)
+    {
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
+
+        map_val.size = 1;
+        map_val.is_decoded = false;
+        map_val.key_offset = pool->Alloc(2);
+        map_val.value_offset = map_val.key_offset + 1;
+
+        auto* key = pool->Get(map_val.key_offset);
+        auto* value = pool->Get(map_val.value_offset);
+        key[0] = BoltValue(v.first);
+        value[0] = v.second;
+    } // end pair cntr
+
+
+    /**
      * @brief initializer constructor for neo4j List types 
      *  with heterogeneous data.
      */
     BoltValue(std::initializer_list<BoltValue> init)
         : type(BoltType::List)
     {
-        pool = GetBoltPool<BoltValue>();
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
+
         list_val.size = init.size();
         list_val.is_decoded = false;
         list_val.offset = pool->Alloc(list_val.size);
@@ -294,9 +317,10 @@ struct BoltValue
     BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init)
         : type(BoltType::Map)
     {
-        size_t i = 0;
-        pool = GetBoltPool<BoltValue>();
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
 
+        size_t i = 0;
         map_val.size = init.size();
         map_val.is_decoded = false;
         map_val.key_offset = pool->Alloc(map_val.size << 1);
@@ -322,7 +346,9 @@ struct BoltValue
     BoltValue(u8 tag, std::initializer_list<BoltValue> init)
         :type(BoltType::Struct)
     {
-        pool = GetBoltPool<BoltValue>();
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
+
         struct_val.size = init.size();
         struct_val.is_decoded = false;
         struct_val.tag = tag;
@@ -557,28 +583,18 @@ struct BoltValue
      * 
      * @param size the size of the list
      */
-    static BoltValue Make_List(const size_t size)
+    static BoltValue Make_List()
     {
         BoltValue v;
         v.type = BoltType::List;
-        v.pool = GetBoltPool<BoltValue>();
+        v.pool = nullptr;
+
         v.list_val.is_decoded = false;
-        v.list_val.size = size;
-        v.list_val.offset = v.pool->Alloc(size);
+        v.list_val.size = 0;
+        v.list_val.ptr = nullptr;   // not decoded
+        v.list_val.offset = 0; 
         return v;
     } // end Make_List
-
-
-    size_t current{0};
-    void Append_List(BoltValue &val)
-    {
-        //std::cout << current << '\n';
-        // if (current < list_val.size)
-        // {
-        //     list_val.list[current] = val;
-        //     ++current;
-        // } // end if
-    } // end Append_List
 
 
     /**
@@ -655,10 +671,6 @@ struct BoltValue
         if constexpr (is_big_endian) 
         {
             int_val = *((T*)ptr);
-            // T tmp;
-            // iCpy(&tmp, ptr, sizeof(T));
-            // tmp = byte_swap<T>(tmp); 
-            // int_val = tmp;
         } // end if byte
         else 
         {
@@ -666,30 +678,6 @@ struct BoltValue
             int_val = byte_swap<T>(int_val);
         } // end else little
     } // end Set_Int_RawDirect
-
-
-    /**
-     * @brief attempts to get the value supported if not compound alas
-     *  return's a string representation based on type
-     */
-    // template<typename T>
-    // T Get() const 
-    // {
-    //     if constexpr(std::is_same_v(T, nullptr_t))
-    //         return Make_Null();
-    //     if constexpr (std::is_same_v(T, bool))
-    //         return bool_val;
-    //     else if constexpr (std::is_same_v(T, int))
-    //         return int_val;
-    //     else if constexpr (std::is_same_v(T, double))
-    //         return float_val;
-    //     else if constexpr (std::is_same_v(T, const char*))
-    //         return std::string(str_val.ptr, str_val.len);
-    //     else if constexpr (std::is_same_v(T, std::string))
-    //         return std::string(str_val.ptr, str_val.len);
-    //     else
-    //         return str_jump[(int)type](this);
-    // } // end else
 
 
     /**

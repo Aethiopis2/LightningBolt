@@ -52,21 +52,24 @@ int main() {
     }, iterations);
 
     // === 2. Batched Bolt list of 10,000 items ===
-    BoltValue bigList = BoltValue::Make_List(10'000);
-    for (int i = 0; i < 10'000; ++i) {
-        BoltValue list = {
-            mp("id", i),
-            mp("score", i * 0.1),
-            mp("tags", BoltValue({"a", "b", "c"}))};
-        bigList.Append_List(list);
-    }
-
+  
     // Pre-allocate reusable buffer for batch encoding
     BoltBuf batchBuf(8 * 1024 * 1024);  // 8MB
+    iZero(batchBuf.Data(), 8*1024*1024);
     BoltEncoder encoder(batchBuf);
+    BoltValue tags = BoltValue({"a", "b", "c"});  // reused for all records
+
     benchmark("Batch encoding of 10,000 Bolt records", [&] {
         batchBuf.Reset();
-        encoder.Encode(bigList);
+        for (u16 i = 0; i < 10'000; i++)
+        {
+            BoltValue lst = {
+                mp("id", i+1),
+                mp("score", (i+1) * 0.1),
+                mp("tags", tags)
+            };
+            encoder.Encode(lst);
+        } // end for
     }, iterations);
 
     // Optional: Benchmark decoding that batch

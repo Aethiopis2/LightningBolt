@@ -91,7 +91,8 @@ class NeoConnection : public TcpClient
 {
 public: 
 
-    NeoConnection(const u64 cli_id, const std::string& connection_string);
+    NeoConnection(const std::string& connection_string, const u64 cli_id = 1,
+        const BoltValue& extras = BoltValue::Make_Map());
     ~NeoConnection();
     
     bool Is_Closed() const override;
@@ -144,7 +145,9 @@ private:
     bool is_version5;
     u8 hello_count;
 
-    std::vector<std::string> user_auth;             // db creds, i.e. username and password resp
+    std::vector<std::string> user_auth;     // db creds, i.e. username and password resp
+    BoltValue extra_connection_params;      // extra set of parameters for connection protocol specfic
+    
     std::string message_string;             
     std::string err_string;
 

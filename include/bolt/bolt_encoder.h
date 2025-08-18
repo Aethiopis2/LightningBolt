@@ -323,10 +323,20 @@ private:
         {
             Write_Bits<u8>(0x90 | static_cast<u8>(len));
         } // end if tiny
-        else 
+        else if (len <= 0xFF)
         {
             Write_Bits<u8>(BOLT_LIST8);
             Write_Bits<u8>(static_cast<u8>(len));
+        } // end else if 8-bit
+        else if (len <= 0xFFFF) 
+        {
+            Write_Bits<u8>(BOLT_LIST16);
+            Write_Bits<u16>(static_cast<u16>(htons(len)));
+        } // end else if 16-bit
+        else 
+        {
+            Write_Bits<u8>(BOLT_LIST32);
+            Write_Bits<u32>(static_cast<u32>(htonl(len)));
         } // end else
 
         auto* p = list.pool->Get(list.list_val.offset);
