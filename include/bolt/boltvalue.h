@@ -144,6 +144,9 @@ struct BoltValue
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
     u8 padding[3];
 
+    /**
+     * @brief the union holding various neo4j bolt types
+	 */
     union 
     {
         s64 int_val;
@@ -196,14 +199,14 @@ struct BoltValue
     };
 
     
+    //===============================================================================|
     /* Constructors */
-    
     /**
      * @brief
      */
     BoltValue() = default;
 
-
+    //===============================================================================|
     /** 
      * @brief 
      */
@@ -213,7 +216,7 @@ struct BoltValue
         bool_val = b;
     } // end bool cntr
 
-
+    //===============================================================================|
     /** 
      * @brief 
      */
@@ -223,7 +226,7 @@ struct BoltValue
         int_val = i;
     } // end int cntr
 
-
+    //===============================================================================|
     /** 
      * @brief
      */
@@ -233,7 +236,7 @@ struct BoltValue
         int_val = i;
     } // end int cntr
 
-
+    //===============================================================================|
     /** 
      * @brief
      */
@@ -243,7 +246,7 @@ struct BoltValue
         float_val = d;
     } // end double cntr
 
-
+    //===============================================================================|
     /** 
      * @brief
      */
@@ -254,7 +257,7 @@ struct BoltValue
         str_val.length = strlen(str);
     } // end char* cntr
 
-    
+    //===============================================================================|
     /**
      * @brief
      */
@@ -265,7 +268,7 @@ struct BoltValue
         str_val.length = str.size();
     } // end string cntr
 
-
+    //===============================================================================|
     /**
      * @brief
      */
@@ -286,7 +289,7 @@ struct BoltValue
         value[0] = v.second;
     } // end pair cntr
 
-
+    //===============================================================================|
     /**
      * @brief initializer constructor for neo4j List types 
      *  with heterogeneous data.
@@ -309,7 +312,7 @@ struct BoltValue
         } // end for
     } // end constructor
 
-
+    //===============================================================================|
     /**
      * @brief initializer for noe4j dictionary types
      *  or what I like to call maps.
@@ -326,16 +329,17 @@ struct BoltValue
         map_val.key_offset = pool->Alloc(map_val.size << 1);
         map_val.value_offset = map_val.key_offset + map_val.size;
 
-        auto* key = pool->Get(map_val.key_offset);
-        auto* value = pool->Get(map_val.value_offset);
         for (auto& list : init)
         {
-            key[i] = BoltValue(list.first);
-            value[i++] = list.second;
+            auto* key = pool->Get(map_val.key_offset + i);
+            auto* value = pool->Get(map_val.value_offset + i++);
+
+            *key = BoltValue(list.first);
+            *value = list.second;
         } // end for 
     } // end initalizer
 
-
+    //===============================================================================|
     /**
      * @brief initializer for neo4j struct types. All other compund
      *  types such as nodes and relataionships build on this struct. 
@@ -355,12 +359,14 @@ struct BoltValue
         struct_val.offset = pool->Alloc(struct_val.size);
 
         size_t i = 0;
-        auto *fields = pool->Get(struct_val.offset);
-        for (auto &k : init)
-            fields[i++] = k;
+        for (auto& k : init)
+        {
+            auto* fields = pool->Get(struct_val.offset + i++);
+            *fields = k;
+        } // end k
     } // end BoltValue
 
-
+    //===============================================================================|
     /**
      * @brief destructor
      */
@@ -368,9 +374,15 @@ struct BoltValue
     {
         if (pool)
             Free_Bolt_Value(*this);
+		pool = nullptr;     // double-tap
     } // end destructor
 
-
+    //===============================================================================|
+    /**
+     * @brief operator overloading for list types
+     * 
+	 * @param index the index to access
+	 */ 
     BoltValue operator()(const size_t index)
     {
         size_t size;
@@ -424,9 +436,11 @@ struct BoltValue
         return BoltValue::Make_Unknown();
     } // end operator
 
-
+    //===============================================================================|
     /**
      * @brief operator overloading for map types
+     * 
+	 * @param key the string key to access
      */
     BoltValue operator[](const char *key)
     {
@@ -472,8 +486,8 @@ struct BoltValue
     } // end operator[]
 
 
+    //===============================================================================|
     /* Small factories */
-
     /**
      * @brief factory for producing Null types at will
      */
@@ -484,7 +498,7 @@ struct BoltValue
         return v;
     } // end Make_Null
 
-
+    //===============================================================================|
     /**
      * @brief factory to produce boolean
      * 
@@ -498,7 +512,7 @@ struct BoltValue
         return v;
     } // end Make_Int
 
-
+    //===============================================================================|
     /**
      * @brief factory for integer values.
      * 
@@ -512,7 +526,7 @@ struct BoltValue
         return bv;
     } // end Make_Int
 
-    
+    //===============================================================================|
     /**
      * @brief factory for float/double values.
      * 
@@ -526,7 +540,7 @@ struct BoltValue
         return v;
     } // end Make_Float
 
-
+    //===============================================================================|
     /**
      * @brief factory for Bytes. Which are really arrays of byte values
      *  like ASCII encoded strings; for claritiy simply classified as bytes 
@@ -543,7 +557,7 @@ struct BoltValue
         return v;
     } // end Make_Bytes
 
-
+    //===============================================================================|
     /**
      * @brief factory of strings
      * 
@@ -559,7 +573,7 @@ struct BoltValue
         return v;
     } // end Make_String
 
-
+    //===============================================================================|
     /**
      * @brief factory for hetero-lists (lazy decoding style)
      * 
@@ -576,7 +590,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
-
+    //===============================================================================|
     /**
      * @brief factory for hetero-lists (lazy decoding style)
      *  with a size hint.
@@ -596,7 +610,24 @@ struct BoltValue
         return v;
     } // end Make_List
 
+    //===============================================================================|
+    /**
+	 * @brief inserts a value into the list at the start of the offset by
+	 *  shifting existing values to the right.
+     * 
+     * @param v the bolt value to insert
+	 */
+    void Insert_List(BoltValue v)
+    {
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
 
+        BoltValue val = v;  // prevents opt outs
+        Insert(val, list_val.offset);
+        list_val.size++;
+    } // end Add_List
+
+    //===============================================================================|
     /**
      * @brief factory for maps
      * 
@@ -613,7 +644,28 @@ struct BoltValue
         return v;
     } // end Make_List
 
+    /**
+	 * @brief inserts a key-value pair into the map at the begining of the pool 
+	 *  by shifting existing values to the right.
+     * 
+     * @param key the key to insert
+	 * @param value the value to insert
+     */ 
+    void Insert_Map(BoltValue key, BoltValue value)
+    {
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
 
+		BoltValue k = key;      // prevents opt outs
+		BoltValue val = value;  // prevents opt outs
+
+        Insert(val, map_val.key_offset + map_val.size);
+        Insert(k, map_val.key_offset);
+        map_val.value_offset++;
+        map_val.size++;
+	} // end Insert_Map 
+
+    //===============================================================================|
     /**
      * @brief factor for maps
      */
@@ -621,6 +673,7 @@ struct BoltValue
     {
         BoltValue v;
         v.type = BoltType::Map;
+		v.pool = nullptr;
         v.map_val.is_decoded = false;
         v.map_val.ptr = nullptr;
         v.map_val.size = 0;
@@ -629,7 +682,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
-
+    //===============================================================================|
     /**
      * @brief factory of structs
      * 
@@ -648,7 +701,24 @@ struct BoltValue
         return v;
     } // end Make_Struct
 
+    //===============================================================================|
+    /**
+	 * @brief inserts a field into the struct at the start of the offset by
+	 *  shifting existing values to the right.
+     * 
+	 * @param v the bolt value to insert
+     */
+    void Insert_Struct(BoltValue v)
+    {
+        if (!pool)
+            pool = GetBoltPool<BoltValue>();
 
+        BoltValue val = v;  // prevents opt outs
+        Insert(val, struct_val.offset);
+        struct_val.size++;
+	} // end Add_Struct
+
+    //===============================================================================|
     /**
      * @brief unknown factory
      */
@@ -659,7 +729,39 @@ struct BoltValue
         return v;
     } // end Make_Unknown
 
+    //===============================================================================|
+    /**
+     * @brief Frees the BoltValue from the pool if it is not decoded.
+     *  This is used to release resources when the value is no longer needed.
+     *
+     * @param val The BoltValue to free.
+     * @param clear_all explict free useful during insertions
+     */
+    static void Free_Bolt_Value(BoltValue& val, const bool clear_all = false)
+    {
+        if (val.type == BoltType::List && !val.list_val.is_decoded)
+            val.pool->Release(clear_all);
 
+        else if (val.type == BoltType::Map && !val.map_val.is_decoded)
+            val.pool->Release(clear_all);
+
+        else if (val.type == BoltType::Struct && !val.struct_val.is_decoded)
+            val.pool->Release(clear_all);
+    } // end FreeBoltValue
+
+    //===============================================================================|
+    /**
+     * @brief Converts the BoltValue to a human-readable string representation.
+     *  The actual string representation depends on the type of the value.
+     *
+     * @return std::string representing the BoltValue.
+     */
+    std::string ToString() const
+    {
+        return str_jump[static_cast<u8>(type)](this);
+    } // end ToString
+
+    //===============================================================================|
     /**
      * @brief used to decode integer values from the buffer and ajust the endianess
      *  according to the machine.
@@ -680,6 +782,9 @@ struct BoltValue
     } // end Set_Int_RawDirect
 
 
+    private:
+
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue null to a human-readable string representation.
      *  The null value is represented as "null".
@@ -692,7 +797,7 @@ struct BoltValue
         return "null";
     } // end ToString_Null
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue boolean to a human-readable string representation.
      *  The boolean is represented as "true" or "false".
@@ -705,7 +810,7 @@ struct BoltValue
         return (ptr->bool_val ? "true" : "false");
     } // end ToString_Bool
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue integer to a human-readable string representation.
      *  The integer is represented as a decimal number.
@@ -718,7 +823,7 @@ struct BoltValue
         return std::to_string(ptr->int_val);
     } // end ToString_Int
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue float to a human-readable string representation.
      *  The float is represented as a decimal number.
@@ -731,7 +836,7 @@ struct BoltValue
         return std::to_string(ptr->float_val);
     } // end ToString_Float
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue string to a human-readable string representation.
      *  The string is represented as a quoted string.
@@ -746,7 +851,7 @@ struct BoltValue
         return std::string(ptr->str_val.str, ptr->str_val.length);
     } // end ToString_String
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue byte array to a human-readable string representation.
      *  The byte array is represented as a comma-separated list of hexadecimal values enclosed in square brackets.
@@ -773,7 +878,7 @@ struct BoltValue
         return stream.str();
     } // end ToString_Bytes
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue list to a human-readable string representation.
      *  The list is represented as a comma-separated list of values enclosed in square brackets.
@@ -789,10 +894,10 @@ struct BoltValue
         std::string s = "[";
         if (!pval->list_val.is_decoded) 
         {
-            auto* v = pval->pool->Get(pval->list_val.offset);
             for (size_t i = 0; i < pval->list_val.size; i++) 
             {
-                s += v[i].ToString();
+                auto* v = pval->pool->Get(pval->list_val.offset + i);
+                s += v->ToString();
                 if (i != pval->list_val.size - 1)
                     s += ",";
             } // end for
@@ -814,7 +919,7 @@ struct BoltValue
         return s;
     } // end ToString_List
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue map to a human-readable string representation.
      *  The map is represented as a comma-separated list of key-value pairs enclosed in curly braces.
@@ -844,12 +949,13 @@ struct BoltValue
         } // end if decoded
         else 
         {
-            auto* key = pval->pool->Get(pval->map_val.key_offset);
-            auto* value = pval->pool->Get(pval->map_val.value_offset);
             for (size_t i = 0; i < pval->map_val.size; i++) 
             {
-                s += key[i].ToString() + ":" +
-                    value[i].ToString();
+                auto* key = pval->pool->Get(pval->map_val.key_offset + i);
+                auto* value = pval->pool->Get(pval->map_val.value_offset + i);
+
+                s += key->ToString() + ":" +
+                    value->ToString();
                 if (i != pval->map_val.size - 1)
                     s += ",";
             } // end for
@@ -859,7 +965,7 @@ struct BoltValue
         return s;
     } // end ToString_Map
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue struct to a human-readable string representation.
      *  The struct is represented as a comma-separated list of fields enclosed in curly braces.
@@ -943,10 +1049,10 @@ struct BoltValue
         } // end if decoded
         else 
         {
-            auto* fields = pval->pool->Get(pval->struct_val.offset);
             for (size_t i = 0; i < pval->struct_val.size; i++) 
             {
-                s += fields[i].ToString();
+                auto* field = pval->pool->Get(pval->struct_val.offset + i);
+                s += field->ToString();
                 if (i != pval->struct_val.size - 1)
                     s += ",";
             } // end for
@@ -956,7 +1062,7 @@ struct BoltValue
         return s;
     } // end ToString_Struct
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Node to a human-readable string representation.
      *  The Node is represented with its ID, labels, properties, and element ID.
@@ -982,7 +1088,7 @@ struct BoltValue
         return s;
     } // end ToString_Point2D
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Relationship to a human-readable string representation.
      *  The Relationship is represented with its ID, start node ID, end node ID, type, properties,
@@ -1019,7 +1125,7 @@ struct BoltValue
         return s;
     } // end ToString_Relationship
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue UnboundRelationship to a human-readable string representation.
      *  The UnboundRelationship is represented with its ID, type, properties, and element ID.
@@ -1045,7 +1151,7 @@ struct BoltValue
         return s;
     } // end ToString_Unbound_Relationship
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Path to a human-readable string representation.
      *  The Path is represented with its nodes, relationships, and indices.
@@ -1070,7 +1176,7 @@ struct BoltValue
         return s;
     } // end ToString_Path
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Date to a human-readable string representation.
      *  The Date is represented with its days since epoch Jan 01 1970.
@@ -1090,7 +1196,7 @@ struct BoltValue
         return s;
     } // end ToString_Date
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Time to a human-readable string representation.
      *  The Time is represented with its nanoseconds and timezone offset in seconds.
@@ -1112,7 +1218,7 @@ struct BoltValue
         return s;
     } // end ToString_Time
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue LocalTime to a human-readable string representation.
      *  The LocalTime is represented with its nanoseconds since midnight.
@@ -1132,7 +1238,7 @@ struct BoltValue
         return s;
     } // end ToString_LocalTime
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue DateTime to a human-readable string representation.
      *  The DateTime is represented with its seconds since epoch, nanoseconds, and timezone offset in seconds.
@@ -1156,7 +1262,7 @@ struct BoltValue
         return s;
     } // end ToString_DateTime
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue DateTimeTimeZoneId to a human-readable string representation.
      *  The DateTimeTimeZoneId is represented with its seconds since epoch, nanoseconds, and timezone ID.
@@ -1180,7 +1286,7 @@ struct BoltValue
         return s;
     } // end ToString_DateTimeTimeZoneId
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue LocalDateTime to a human-readable string representation.
      *  The LocalDateTime is represented with its seconds since epoch and nanoseconds.
@@ -1202,7 +1308,7 @@ struct BoltValue
         return s;
     } // end ToString_LocalDateTime
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Duration to a human-readable string representation.
      *  The Duration is represented with its months, days, seconds, and nanoseconds.
@@ -1228,7 +1334,7 @@ struct BoltValue
         return s;
     } // end ToString_Duration
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Point2D to a human-readable string representation.
      *  The Point2D is represented with its SRID, x, and y coordinates.
@@ -1251,7 +1357,7 @@ struct BoltValue
         return s;
     } // end ToString_Point2D
 
-
+    //===============================================================================|
     /**
      * @brief Converts a BoltValue Point3D to a human-readable string representation.
      *  The Point3D is represented with its SRID, x, y, and z coordinates.
@@ -1275,8 +1381,7 @@ struct BoltValue
         return s;
     } // end ToString_Point3D
 
-
-
+    //===============================================================================|
     /**
      * @brief
      */
@@ -1285,36 +1390,112 @@ struct BoltValue
         return "<?>";
     } // end Unk
 
-
+    //===============================================================================|
     /**
-     * @brief Converts the BoltValue to a human-readable string representation.
-     *  The actual string representation depends on the type of the value.
+	 * @brief a helper to insert a BoltValue into the pool at a specific start offset,
+	 *  but with a bit of querks to handle lists/maps/structs offsets for nested items.
+     *  The function shifts existing items in the pool to make space for the new item,
+	 *  and copies the new item into the specified position. 
      * 
-     * @return std::string representing the BoltValue.
+	 * NOTE: The function only works on inlined parameters. This allows it to predictably
+	 *  allocate space in the pool that counters the destroyed items that are passed through
+     *  the parameter. For every bolt value passed it allocates a single space in the pool.
+	 *  Should the types passed contain nested lists/maps/structs, it will recursively allocate
+	 *  more space in the pool to account for those nested items. This allows the function to 
+	 *  maintain the integrity of the pool and ensure that all items are properly stored even
+	 *  when the parameter temporaries go out of scope.
+     * 
+     * @param v the bolt value to insert
+     * @param start the starting point in the pool, i.e. the first stored item
      */
-    std::string ToString() const
+    void Insert(BoltValue& v, const size_t start)
     {
-        return str_jump[static_cast<u8>(type)](this);
-    } // end ToString
+        size_t end = pool->Alloc(1);
+		pool->Alloc(1);  // for the parameter
 
+		Allocate_Only(v);
 
+        if (v.type == BoltType::List) v.list_val.offset++;
+        else if (v.type == BoltType::Map)
+        {
+            v.map_val.key_offset++;
+            v.map_val.value_offset++;
+        } // end else if map
+        else if (v.type == BoltType::Struct) v.struct_val.offset++;
+
+		// now shift everything down 1
+        for (int i = static_cast<int>(end); i > static_cast<int>(start); --i)
+        {
+            BoltValue* bv = pool->Get(static_cast<size_t>(i));
+            BoltValue* prev = pool->Get(static_cast<size_t>(i) - 1);
+
+			// shift offsets for lists/maps/structs
+            if (prev->type == BoltType::List)
+            {
+                prev->list_val.offset++;
+            } // end if list
+            else if (prev->type == BoltType::Map)
+            {
+                prev->map_val.key_offset++;
+                prev->map_val.value_offset++;
+            } // end else if map
+            else if (prev->type == BoltType::Struct)
+            {
+                prev->struct_val.offset++;
+            } // end else if struct
+
+			*bv = *prev;
+		} // end for shift
+
+		*pool->Get(start) = v;
+    } // end Insert
+
+    //===============================================================================|
     /**
-     * @brief Frees the BoltValue from the pool if it is not decoded.
-     *  This is used to release resources when the value is no longer needed.
-     * 
-     * @param val The BoltValue to free.
+	 * @brief helper of helper for Insert to allocate space in the pool. The function
+	 *  recursively traverses nested lists/maps/structs to allocate space for all items
+	 *  passed in the parameter allowing it to maintain pool integrity even when the
+	 *  parameter goes out of scope.
+     *
+     * @param val the value to readd to the pool
+	 * @oaram nested whether the call is nested defaults to false
      */
-    static void Free_Bolt_Value(BoltValue& val) 
+    void Allocate_Only(BoltValue& val, const bool nested = false)
     {
-        if (val.type == BoltType::List && !val.list_val.is_decoded)
-            val.pool->Release();
+        size_t size = 0, offset = 0;
+        if (val.type == BoltType::List)
+        {
+            size = val.list_val.size;
+            offset = val.list_val.offset;
+        } // end if list
+        else if (val.type == BoltType::Map)
+        {
+            size = val.map_val.size;
+            offset = val.map_val.value_offset;  // key is always string
+        } // end else if map
+        else if (val.type == BoltType::Struct)
+        {
+            size = val.struct_val.size;
+            offset = val.struct_val.offset;
+        } // end else if struct
 
-        else if (val.type == BoltType::Map && !val.map_val.is_decoded)
-            val.pool->Release();
+        for (int i = 0; i < (int)size; i++)
+        {
+            BoltValue* next = pool->Get(offset + i);
+            if (next->type == BoltType::List || 
+                next->type == BoltType::Map ||
+                next->type == BoltType::Struct)
+            {
+                Allocate_Only(*next, true);
+            } // end if
+		} // end for
 
-        else if (val.type == BoltType::Struct && !val.struct_val.is_decoded )
-            val.pool->Release();
-    } // end FreeBoltValue
+        if (nested)
+            pool->Alloc(1);
+
+        pool->Alloc(val.type == BoltType::Map ? size << 1 : size);
+	} // end Allocate_Only
+
 
 
     // jump table for to_string parsing based on type

@@ -31,7 +31,7 @@ int main() {
 
     // === 1. Streaming 100 Cypher packets ===
     std::vector<BoltValue> streamOps;
-    streamOps.reserve(100);
+    streamOps.reserve(10);
     for (int i = 0; i < 100; ++i) {
         streamOps.emplace_back(BoltValue({
             mp("statement", "RETURN $x + $y"),
@@ -52,24 +52,25 @@ int main() {
     }, iterations);
 
     // === 2. Batched Bolt list of 10,000 items ===
-  
+    const u16 size = 10'000;
+    BoltValue bgList = BoltValue::Make_List();
+    for (u16 i = 0; i < size; i++)
+    {
+        bgList.Insert_List(BoltValue({
+            mp("id", i + 1),
+            mp("score", (i + 1) * 0.1),
+            mp("tags", BoltValue({i,i+1,i+2}))
+            }));
+    } // end for
+
     // Pre-allocate reusable buffer for batch encoding
     BoltBuf batchBuf(8 * 1024 * 1024);  // 8MB
     iZero(batchBuf.Data(), 8*1024*1024);
     BoltEncoder encoder(batchBuf);
-    BoltValue tags = BoltValue({"a", "b", "c"});  // reused for all records
 
     benchmark("Batch encoding of 10,000 Bolt records", [&] {
         batchBuf.Reset();
-        for (u16 i = 0; i < 10'000; i++)
-        {
-            BoltValue lst = {
-                mp("id", i+1),
-                mp("score", (i+1) * 0.1),
-                mp("tags", tags)
-            };
-            encoder.Encode(lst);
-        } // end for
+        encoder.Encode(bgList);
     }, iterations);
 
     // Optional: Benchmark decoding that batch
@@ -80,6 +81,25 @@ int main() {
         batchBuf.Reset_Read();
     }, iterations);
 
-    // std::cout << out.Dump_Txt() << std::endl;
+    BoltValue::Free_Bolt_Value(bgList, true);
+
+
+    // === 4. Fun: Batch Maps of 1,000 items ===
+    const u16 size2 = 1000;
+    BoltValue bgMap = BoltValue::Make_Map();
+    for (u16 i = 0; i < size2; i++)
+    {
+        bgMap.Insert_Map("TheKey", BoltValue({
+            mp("id", BoltValue({i + 1, i + 2, i + 3}))
+            }));
+    } // end for
+
+	// clear previous buffer
+    iZero(batchBuf.Data(), 8 * 1024 * 1024);
+    benchmark("Batch encoding of 1,000 Bolt map/dictionary records", [&] {
+        batchBuf.Reset();
+        encoder.Encode(bgMap);
+        }, iterations);
+
     return 0;
 }

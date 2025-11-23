@@ -445,7 +445,7 @@ void NeoConnection::Decode_Response(u8* view, const size_t bytes)
     size_t skip = 0;
     while (skip < bytes)
     {
-        // Dump_Hex((const char*)view, bytes);
+         //Dump_Hex((const char*)view, bytes);
         if (!(0xB0 & *(view + 2)))
             return;
 

@@ -1,3 +1,6 @@
+.vs/
+out/
+CMakeSettings.json
 build/
 .vscode/
 # Prerequisites

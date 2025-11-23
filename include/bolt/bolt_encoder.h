@@ -339,10 +339,10 @@ private:
             Write_Bits<u32>(static_cast<u32>(htonl(len)));
         } // end else
 
-        auto* p = list.pool->Get(list.list_val.offset);
         for (int i{0}; i < len; i++) 
         {
-            Encode(p[i]);
+            auto* p = list.pool->Get(list.list_val.offset + i);
+            Encode(*p);
         } // end for
     } // end for
 
@@ -373,12 +373,12 @@ private:
             Write_Bits<u32>(static_cast<u32>(count));
         }
 
-        auto* key = map.pool->Get(map.map_val.key_offset);
-        auto* value = map.pool->Get(map.map_val.value_offset);
         for (int i = 0; i < count; i++) 
         {
-            Encode(key[i]);    // key
-            Encode(value[i]);  // value
+            auto* key = map.pool->Get(map.map_val.key_offset + i);
+            auto* value = map.pool->Get(map.map_val.value_offset + i);
+            Encode(*key);    // key
+            Encode(*value);  // value
         } // end 
     } // end Encode_Map
     
@@ -393,10 +393,10 @@ private:
         Write_Bits<u8>((BOLT_STRUCT | static_cast<u8>(len)));
         Write_Bits<u8>(val.struct_val.tag);
 
-        auto* fields = val.pool->Get(val.struct_val.offset);
         for (int i = 0; i < len; i++)
         {
-            Encode(fields[i]);
+            auto* field = val.pool->Get(val.struct_val.offset + i);
+            Encode(*field);
         } // end for 
     } // end Encode_Struct
 

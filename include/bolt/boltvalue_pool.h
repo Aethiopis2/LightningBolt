@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file boltvalue_pool.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
@@ -307,12 +307,13 @@ struct BoltPool
 
         // Scratch
         if (used_from_scratch > 0)
-            scratch.Alloc(used_from_scratch);
+            offset = scratch.Alloc(used_from_scratch);
 
         // Arena
         size_t arena_local_offset = arena.Alloc(used_from_arena);
         if (arena_local_offset == size_t(-1)) return size_t(-1);
 
+        if (used_from_scratch == 0) offset = arena_local_offset + scratch.size;
         allocation_log.push_back({ offset, count });
         return offset;
     } // end Alloc
@@ -320,9 +321,17 @@ struct BoltPool
 
     /**
      * @brief Releases the most recent allocation (LIFO)
+     * 
+     * @param clear_all special command to explicitly free the buffer
      */
-    void Release() 
+    void Release(const bool clear_all) 
     {
+        if (clear_all)
+        {
+            allocation_log.clear();
+            Reset_All();
+        } // end if
+
         if (allocation_log.empty()) return;
 
         Allocation last = allocation_log.back();
@@ -374,6 +383,15 @@ struct BoltPool
         else
             return arena.Get(global_offset - SCRATCH_SIZE);
     } // end Get
+
+
+    /**
+     * @brief returns the last offset position in the pool
+     */
+    size_t Get_Last_Offset() const 
+    {
+		return scratch.size + arena.used;
+	} // end Get_Last_Offset
 };
 
 

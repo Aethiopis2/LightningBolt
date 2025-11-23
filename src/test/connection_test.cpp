@@ -63,7 +63,9 @@ int main()
     for (size_t i = 0; i < iterations; i++)
     {
         NeoConnection con("localhost:7687@neo4j:username@password");
-        con.Start();
+        if (con.Start() < 0)
+            return 0;
+
         Test test;
 
         for (size_t k = 0; k < NUM_TESTS; k++)

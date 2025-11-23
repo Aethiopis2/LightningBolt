@@ -17,6 +17,6 @@ add_library(driver SHARED
 
 target_include_directories(driver PUBLIC include)
 
-add_executable(connection_test src/test/connection_test.cpp)
-target_link_libraries(connection_test driver)
-set_target_properties(connection_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+add_executable(streaming_batch_test src/test/streaming_batch_tests.cpp)
+target_link_libraries(streaming_batch_test driver)
+set_target_properties(streaming_batch_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
