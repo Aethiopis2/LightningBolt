@@ -45,6 +45,7 @@
 #include "basics.h"
 #include <memory>
 #include <cassert>
+#include "utils/utils.h"
 
 
 
@@ -329,6 +330,16 @@ public:
     {
         stat.Update(this_cycle_bytes);
     } // end Update_Stat
+
+    inline size_t Get_Write_Offset() const 
+    {
+        return write_offset;
+	} // end Get_Write_Offset
+
+    inline size_t Get_Read_Offset() const 
+    {
+        return read_offset;
+	} // end Get_Read_Offset
 
 private:
 

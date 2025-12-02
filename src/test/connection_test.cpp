@@ -16,7 +16,7 @@
 //          INCLUDES
 //===============================================================================|
 #include <chrono>
-#include "connection/central_dispatcher.h"
+#include "connection/neoconnection.h"
 #include "bolt/bolt_response.h"
 #include <numeric>
 using namespace std;
@@ -62,9 +62,23 @@ int main()
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoConnection con("localhost:7687@neo4j:username@password");
-        if (con.Start() < 0)
+        NeoConnection con(BoltValue({
+			mp("host", "localhost:7687"),
+			mp("username", "neo4j"),
+			mp("password", "tobby@melona"),
+			mp("encrypted", "false")
+            }, false));
+
+        if (int ret; (ret = con.Start()) < 0)
+        {
+            if (ret == -1)
+				Dump_Err_Exit("Failed to connect to the server");
+			else 
+				Dump_App_Err(con.Get_Last_Error().c_str());
+
             return 0;
+        } // end if 
+            
 
         Test test;
 
@@ -76,8 +90,15 @@ int main()
                 con.Run_Query(test.cypher[k]);
 
                 BoltMessage out;
-                while (con.Fetch_Sync(out) > 0);
-                    // Print("%s", out.ToString().c_str());
+                int ret;
+                while ((ret = con.Fetch(out)) > 0);
+                     //Print("%s", out.ToString().c_str());
+
+                if (ret < 0)
+                {
+                    Dump_App_Err(con.Get_Last_Error().c_str());
+                    break;
+				} // end if
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
@@ -93,6 +114,7 @@ int main()
             else 
             {
                 Print("No durations recorded.");
+                break;
             } // end else
 
             durs.clear();

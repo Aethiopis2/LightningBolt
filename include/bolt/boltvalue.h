@@ -142,7 +142,9 @@ struct BoltValue
 {
     BoltType type;
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
-    u8 padding[3];
+	bool disposable = false;              // indicates if the value should be disposed
+	u64 insert_count = 0;                 // count of insertions for tracking
+    u8 padding[2];
 
     /**
      * @brief the union holding various neo4j bolt types
@@ -272,8 +274,8 @@ struct BoltValue
     /**
      * @brief
      */
-    BoltValue(std::pair<const char*, BoltValue> v)
-        : type(BoltType::Map)
+    BoltValue(std::pair<const char*, BoltValue> v, const bool disp = true)
+		: type(BoltType::Map), disposable(disp)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -294,8 +296,8 @@ struct BoltValue
      * @brief initializer constructor for neo4j List types 
      *  with heterogeneous data.
      */
-    BoltValue(std::initializer_list<BoltValue> init)
-        : type(BoltType::List)
+    BoltValue(std::initializer_list<BoltValue> init, const bool disp = true)
+		: type(BoltType::List), disposable(disp)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -317,8 +319,8 @@ struct BoltValue
      * @brief initializer for noe4j dictionary types
      *  or what I like to call maps.
      */
-    BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init)
-        : type(BoltType::Map)
+    BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init, const bool disp = true)
+		: type(BoltType::Map), disposable(disp)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -347,8 +349,8 @@ struct BoltValue
      * @param tag identifier/signature of the structure according
      *  neo4j bolt specs.
      */
-    BoltValue(u8 tag, std::initializer_list<BoltValue> init)
-        :type(BoltType::Struct)
+    BoltValue(u8 tag, std::initializer_list<BoltValue> init, const bool disp = true)
+        :type(BoltType::Struct), disposable(disp)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -372,9 +374,13 @@ struct BoltValue
      */
     ~BoltValue()
     {
-        if (pool)
+        if (pool && disposable)
+        {
+            while (insert_count-- > 0)
+                Free_Bolt_Value(*this);
+
             Free_Bolt_Value(*this);
-		pool = nullptr;     // double-tap
+		} // end if pool
     } // end destructor
 
     //===============================================================================|
@@ -484,7 +490,6 @@ struct BoltValue
 
         return BoltValue::Make_Unknown();
     } // end operator[]
-
 
     //===============================================================================|
     /* Small factories */
@@ -601,12 +606,12 @@ struct BoltValue
     {
         BoltValue v;
         v.type = BoltType::List;
-        v.pool = nullptr;
+        v.pool = GetBoltPool<BoltValue>();
 
         v.list_val.is_decoded = false;
         v.list_val.size = 0;
         v.list_val.ptr = nullptr;   // not decoded
-        v.list_val.offset = 0; 
+        v.list_val.offset = v.pool->Get_Last_Offset(); 
         return v;
     } // end Make_List
 
@@ -619,8 +624,8 @@ struct BoltValue
 	 */
     void Insert_List(BoltValue v)
     {
-        if (!pool)
-            pool = GetBoltPool<BoltValue>();
+        if (type != BoltType::List)
+            return;
 
         BoltValue val = v;  // prevents opt outs
         Insert(val, list_val.offset);
@@ -644,6 +649,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
+    //===============================================================================|
     /**
 	 * @brief inserts a key-value pair into the map at the begining of the pool 
 	 *  by shifting existing values to the right.
@@ -653,8 +659,8 @@ struct BoltValue
      */ 
     void Insert_Map(BoltValue key, BoltValue value)
     {
-        if (!pool)
-            pool = GetBoltPool<BoltValue>();
+        if (type != BoltType::Map)
+            return;
 
 		BoltValue k = key;      // prevents opt outs
 		BoltValue val = value;  // prevents opt outs
@@ -673,12 +679,12 @@ struct BoltValue
     {
         BoltValue v;
         v.type = BoltType::Map;
-		v.pool = nullptr;
+		v.pool = GetBoltPool<BoltValue>();
         v.map_val.is_decoded = false;
         v.map_val.ptr = nullptr;
         v.map_val.size = 0;
-        v.map_val.key_offset = 0;
-        v.map_val.value_offset = 0;
+        v.map_val.key_offset = v.pool->Get_Last_Offset();
+        v.map_val.value_offset = v.map_val.key_offset;
         return v;
     } // end Make_List
 
@@ -703,6 +709,23 @@ struct BoltValue
 
     //===============================================================================|
     /**
+     * @brief factor for structs with preset values
+     */
+    static BoltValue Make_Struct(const u8 tag)
+    {
+        BoltValue v;
+        v.type = BoltType::Struct;
+        v.pool = GetBoltPool<BoltValue>();
+        v.struct_val.size = 0;
+		v.struct_val.offset = v.pool->Get_Last_Offset();
+        v.struct_val.ptr = nullptr;
+        v.struct_val.is_decoded = false;
+        v.struct_val.tag = tag;
+        return v;
+	} // end Make_Struct
+
+    //===============================================================================|
+    /**
 	 * @brief inserts a field into the struct at the start of the offset by
 	 *  shifting existing values to the right.
      * 
@@ -710,8 +733,8 @@ struct BoltValue
      */
     void Insert_Struct(BoltValue v)
     {
-        if (!pool)
-            pool = GetBoltPool<BoltValue>();
+        if (type != BoltType::Struct)
+            return;
 
         BoltValue val = v;  // prevents opt outs
         Insert(val, struct_val.offset);
@@ -1393,17 +1416,8 @@ struct BoltValue
     //===============================================================================|
     /**
 	 * @brief a helper to insert a BoltValue into the pool at a specific start offset,
-	 *  but with a bit of querks to handle lists/maps/structs offsets for nested items.
-     *  The function shifts existing items in the pool to make space for the new item,
+	 *  the function shifts existing items in the pool to make space for the new item,
 	 *  and copies the new item into the specified position. 
-     * 
-	 * NOTE: The function only works on inlined parameters. This allows it to predictably
-	 *  allocate space in the pool that counters the destroyed items that are passed through
-     *  the parameter. For every bolt value passed it allocates a single space in the pool.
-	 *  Should the types passed contain nested lists/maps/structs, it will recursively allocate
-	 *  more space in the pool to account for those nested items. This allows the function to 
-	 *  maintain the integrity of the pool and ensure that all items are properly stored even
-	 *  when the parameter temporaries go out of scope.
      * 
      * @param v the bolt value to insert
      * @param start the starting point in the pool, i.e. the first stored item
@@ -1411,9 +1425,6 @@ struct BoltValue
     void Insert(BoltValue& v, const size_t start)
     {
         size_t end = pool->Alloc(1);
-		pool->Alloc(1);  // for the parameter
-
-		Allocate_Only(v);
 
         if (v.type == BoltType::List) v.list_val.offset++;
         else if (v.type == BoltType::Map)
@@ -1444,58 +1455,15 @@ struct BoltValue
                 prev->struct_val.offset++;
             } // end else if struct
 
+            prev->disposable = true;
 			*bv = *prev;
 		} // end for shift
 
-		*pool->Get(start) = v;
+		BoltValue* bov = pool->Get(start);
+		*bov = v;
+		bov->disposable = true;
+        bov->insert_count++;
     } // end Insert
-
-    //===============================================================================|
-    /**
-	 * @brief helper of helper for Insert to allocate space in the pool. The function
-	 *  recursively traverses nested lists/maps/structs to allocate space for all items
-	 *  passed in the parameter allowing it to maintain pool integrity even when the
-	 *  parameter goes out of scope.
-     *
-     * @param val the value to readd to the pool
-	 * @oaram nested whether the call is nested defaults to false
-     */
-    void Allocate_Only(BoltValue& val, const bool nested = false)
-    {
-        size_t size = 0, offset = 0;
-        if (val.type == BoltType::List)
-        {
-            size = val.list_val.size;
-            offset = val.list_val.offset;
-        } // end if list
-        else if (val.type == BoltType::Map)
-        {
-            size = val.map_val.size;
-            offset = val.map_val.value_offset;  // key is always string
-        } // end else if map
-        else if (val.type == BoltType::Struct)
-        {
-            size = val.struct_val.size;
-            offset = val.struct_val.offset;
-        } // end else if struct
-
-        for (int i = 0; i < (int)size; i++)
-        {
-            BoltValue* next = pool->Get(offset + i);
-            if (next->type == BoltType::List || 
-                next->type == BoltType::Map ||
-                next->type == BoltType::Struct)
-            {
-                Allocate_Only(*next, true);
-            } // end if
-		} // end for
-
-        if (nested)
-            pool->Alloc(1);
-
-        pool->Alloc(val.type == BoltType::Map ? size << 1 : size);
-	} // end Allocate_Only
-
 
 
     // jump table for to_string parsing based on type

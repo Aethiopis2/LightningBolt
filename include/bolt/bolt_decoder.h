@@ -120,33 +120,6 @@ public:
         return consumed;
     } // end Decode overloaded
 
-
-    // std::vector<BoltMessage> Decode()
-    // {
-    //     std::vector<BoltMessage> messages;
-    //     while (buf.Size() > 0)
-    //     {
-    //         BoltMessage msg;
-    //         u16 chunk = *((u16*)buf.Read_Ptr());
-    //         msg.chunk_size = htons(chunk);
-    //         buf.Consume(2);
-
-    //         u8* ptr = buf.Read_Ptr();
-    //         while (msg.chunk_size > ptr - buf.Read_Ptr())
-    //         {
-    //             msg.msg = jump_table[*ptr](ptr);
-    //         } // end while one row/schema/node/relation/object/etc
-
-    //         messages.push_back(std::move(msg));
-    //         if (*((u16*)ptr) == 0x00)
-    //             buf.Consume(2);
-            
-    //         buf.Consume(msg.chunk_size);
-    //     } // end while
-
-    //     return messages;
-    // } // end Decode many
-
     /**
      * @brief returns a string representaion of the last
      *  decoding error encountered

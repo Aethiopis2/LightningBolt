@@ -46,7 +46,12 @@ void CentralDispatcher::Init(const std::string &connection_string,
     ref_count.store(0, std::memory_order_relaxed);
     for (size_t i = 0; i < connection_count; i++)
     {
-        auto conn = std::make_shared<NeoConnection>(connection_string, i);
+        auto conn = std::make_shared<NeoConnection>(BoltValue({
+            mp("host", "localhost:7687"),
+            mp("username", "neo4j"),
+            mp("password", "panacea"),
+            mp("encrypted", "false")
+            }));
         if (conn->Start() < 0)
         {
             Dump_Err("connect failed");
@@ -222,7 +227,7 @@ void CentralDispatcher::Poll_Loop()
         {
             if (pfds[i].revents & POLLIN)
             {
-                connection_pool[i-1]->Poll_Readable();
+                //connection_pool[i-1]->Poll_Readable();
             } // end if
         } // end for
     } // end while
@@ -239,31 +244,31 @@ void CentralDispatcher::Poll_Loop()
  */
 void CentralDispatcher::Dispatch_Encoder()
 {
-    while (!shutting_down || !request_queue.Is_Empty())
-    {
-        std::shared_ptr<BoltRequest> req; 
-        auto r = request_queue.Dequeue();
-        if (r.has_value())
-            req = r.value();
+    //while (!shutting_down || !request_queue.Is_Empty())
+    //{
+    //    std::shared_ptr<BoltRequest> req; 
+    //    auto r = request_queue.Dequeue();
+    //    if (r.has_value())
+    //        req = r.value();
 
-        if (req)
-        {
-            auto conn = Get_Connection();
-            if (conn)
-                conn->Run_Query(req);
-            else
-            {
-                request_queue.Enqueue(std::move(req));
-            }
-        } // end if
-        else 
-        {
-            // if (shutting_down.load(std::memory_order_acquire))
-            //     break;
-            // else
-                _mm_pause();
-        } // end else
-    } // end while
+    //    if (req)
+    //    {
+    //        auto conn = Get_Connection();
+    //        if (conn)
+    //            conn->Run_Query(req);
+    //        else
+    //        {
+    //            request_queue.Enqueue(std::move(req));
+    //        }
+    //    } // end if
+    //    else 
+    //    {
+    //        // if (shutting_down.load(std::memory_order_acquire))
+    //        //     break;
+    //        // else
+    //            _mm_pause();
+    //    } // end else
+    //} // end while
 } // end Encoder_Loop
 
 
@@ -284,7 +289,7 @@ void CentralDispatcher::Decoder_Loop()
         {
             if (task->conn->Get_State() != BoltState::Disconnected) 
             {
-                task->conn->Decode_Response(task->view, task->bytes);
+                //task->conn->Decode_Response(task->view, task->bytes);
                 Sub_Ref();
                 //Print("Inside Decoder loop: %d", Get_Ref());
             }

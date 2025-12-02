@@ -111,46 +111,63 @@ std::vector<std::string> Split_String(const std::string &str, const char tokken)
  * @param buf the information to dump as hex and char arrary treated as a char array. 
  * @param len the length of the buffer above
  */
-void Dump_Hex(const char *buf, const size_t len)
+#include <iostream>
+#include <iomanip>
+#include <cstdint>
+#include <cctype>
+
+void Dump_Hex(const char* buf, size_t len)
 {
-    size_t i, j;                    // loop var
-    const size_t skip = 8;          // loop skiping value
-    size_t remaining = skip;        // remaining rows
+    const size_t columns = 16;   // 16 bytes per row
+    size_t i, j;
 
+    // Print header
+    std::cout << "\n          ";
+    for (i = 0; i < columns; i++)
+    {
+        std::cout << "\033[36m" << std::setw(2) << std::setfill('0')
+            << std::hex << std::uppercase << i << " ";
+    } // end for header
+    std::cout << "\033[37m\n";
 
-    // print header
-    printf("\n      ");
-    for (i = 0; i < 8; i++)
-        printf("\033[36m%02X ", (uint16_t)i);
-    printf("\033[37m\n");
+    for (i = 0; i < len; i += columns)
+    {
+        // Print 32-bit address offset
+        std::cout << "\033[36m" << std::setw(8) << std::setfill('0') 
+            << std::hex << std::uppercase << static_cast<uint32_t>(i) 
+            << ":\033[37m ";
 
-    if (len < skip)
-        remaining = len;
-    
-    for (i = 0; i < len; i+=skip)
-    {   
-        printf("\033[36m%04X:\033[37m ", (uint16_t)i);
+        // Print hex values
+        size_t remaining = std::min(columns, len - i);
         for (j = 0; j < remaining; j++)
-            printf("%02X ", (uint8_t)buf[i+j]);
+        {
+            std::cout << std::setw(2) << std::setfill('0') << std::hex
+                << static_cast<uint32_t>(static_cast<uint8_t>(buf[i + j])) << " ";
+        } // end for hex
 
-        if (remaining < skip) {
-            // fill blanks
-            for (j = 0; j < skip - remaining; j++)
-                printf("   ");
+        // Fill blanks if last row is short
+        if (remaining < columns)
+        {
+            for (j = 0; j < columns - remaining; j++)
+                std::cout << "   ";
         } // end if
 
-        printf("\t\t");
+        std::cout << "\t\t";
 
+        // Print ASCII representation
         for (j = 0; j < remaining; j++)
-            printf("%c. ", buf[i+j]);
+        {
+            char c = buf[i + j];
+            if (std::isprint(static_cast<unsigned char>(c)))
+                std::cout << c << " ";
+            else
+                std::cout << ". ";
+        } // end for ascii
 
-        printf("\n");
+        std::cout << "\n";
+    }
 
-        if (len - (i + j) < skip)
-            remaining = len - (i + j);
-    } // end for
-
-    printf("\n");
+    std::cout << "\n";
 } // end Dump_Hex
 
 

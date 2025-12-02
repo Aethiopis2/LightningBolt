@@ -34,15 +34,16 @@
  */
 enum class BoltState : u8 {
     Disconnected,   // dirver disconnected
-    Connecting,     // driver is connecting TCP + version neg + hello
+    Connecting,     // driver is connecting TCP + version neg 
+	Logon,          // driver is sending logon info (v5.1+)     
     Ready,          // driver is ready for call and is idle
-    Run,            // driver is running query/cypher
-    Streaming,      // driver is in a streaming state; i.e. actually fetching
+    Run,            // driver is expecting run success/fail message
+    Pull,           // driver is expecting pull success/fail message
+    Streaming,      // driver is in a streaming state; i.e. reading buffer
     Trx,            // manual transaction state
-    BufferFull,     // the receiving buffer is full and needs to wait
     Error,          // driver has encountered errors?  
 };
-constexpr int DRIVER_STATES = 8;
+constexpr int DRIVER_STATES = 9;
 
 
 
@@ -91,47 +92,41 @@ class NeoConnection : public TcpClient
 {
 public: 
 
-    NeoConnection(const std::string& connection_string, const u64 cli_id = 1,
-        const BoltValue& extras = BoltValue::Make_Map());
+    NeoConnection(BoltValue connection_params, const u64 cli_id = 0);
     ~NeoConnection();
     
     bool Is_Closed() const override;
     int Start();
     void Stop();
 
-    int Run_Query(std::shared_ptr<BoltRequest> req);
-    int Run_Query(const char* cypher);
-    void Decode_Response(u8* view, const size_t bytes);
+    int Run_Query(const char* cypher, BoltValue params=BoltValue::Make_Map(),
+        BoltValue extras = BoltValue::Make_Map());
     int Fetch(BoltMessage& out);
-    int Fetch_Sync(BoltMessage& out);
 
     int Begin_Transaction(const BoltValue& options = BoltValue::Make_Map());
     int Commit_Transaction(const BoltValue& options = BoltValue::Make_Map());
     int Rollback_Transaction(const BoltValue& options = BoltValue::Make_Map());
 
-    void Poll_Readable();
-    void Poll_Writable();
-    void Flush();
-
     void Set_State(BoltState s);
     BoltState Get_State() const;
     u64 Client_ID() const;
 
-    std::string Dump_Error() const;
+    std::string Get_Last_Error() const;
     std::string Dump_Msg() const;
     std::string State_ToString() const;
 
 private: 
     
-    BoltState state;        // the state of connection
-    u64 current_qid;        // incremental identifier for queries
     u64 client_id;          // connection identifier
-    u32 supported_version;  // the current version supported by neo4j server
-    u32 num_queries{0};
+    u64 current_qid;        // incremental identifier for queries
+	int num_queries;        // number of active pipelined queries
+	ssize_t bytes_to_decode{ 0 };   // helper to track bytes to decode
+
     bool has_more{true};
     bool is_chunked{false};
 
-    
+    BoltValue conn_params;  // map of connection parameters
+    BoltState state;        // the state of connection
 
     // storage buffers
     BoltBuf read_buf;
@@ -141,59 +136,63 @@ private:
     BoltDecoder decoder;
     BoltView view;
     
-    // helper's during initalizaiton
-    bool is_version5;
-    u8 hello_count;
-
-    std::vector<std::string> user_auth;     // db creds, i.e. username and password resp
-    BoltValue extra_connection_params;      // extra set of parameters for connection protocol specfic
-    
     std::string message_string;             
     std::string err_string;
 
-
     // utilities
-    int Reconnect();
     void Close_Driver();
-    
     int Negotiate_Version();
-    int Send_Hellov4(bool logon=false);
-    int Send_Hellov5(bool logon=false);
+    int Send_Hellov4();
+    int Send_Hellov5();
+	int Send_Hello();
+    void Encode_Pull();
+
+    int Poll_Readable();
+    void Poll_Writable();
+    void Flush();
+    int Decode_Response(u8* view, const size_t bytes);
+    bool Recv_Completed(const size_t bytes);
+
 
     void Run_Read(std::shared_ptr<BoltRequest> req);
     void Run_Write(std::shared_ptr<BoltRequest> req);
     size_t Extract_Bolt_Message_Length(const u8* view, size_t available);
 
-    void Encode_Pull();
+    
 
-    int Dummy(u8* view, const size_t bytes);
+    int DummyS(u8* view, const size_t bytes);
     int Success_Hello(u8* view, const size_t bytes);
     int Success_Run(u8* view, const size_t bytes);
     int Success_Pull(u8* view, const size_t bytes);
     int Success_Record(u8* view, const size_t bytes);
-    void Fail_Hello();
-    void Fail_Run();
-    void Fail_Pull();
-    void Fail_Record();
 
-    
-    bool Parse_Conn_String(const std::string &conn_string);
-    //void Next_State();
-    
+    void DummyF(u8* view, const size_t bytes);
+    void Fail_Hello(u8* view, const size_t bytes);
+    void Fail_Run(u8* view, const size_t bytes);
+    void Fail_Pull(u8* view, const size_t bytes);
+    void Fail_Record(u8* view, const size_t bytes);
 
-    // jump tables and such
-    using Hello_Fn = int (NeoConnection::*)(bool);
-    Hello_Fn hello;
 
     using Success_Fn = int (NeoConnection::*)(u8*, const size_t);
-    using Fail_Fn = int (NeoConnection::*)(u8*, const size_t, 
-        std::function<void(NeoConnection*)>);
+    using Fail_Fn = void (NeoConnection::*)(u8*, const size_t);
 
-    Success_Fn success_handler[5]{ 
-        &NeoConnection::Dummy,
+    Success_Fn success_handler[DRIVER_STATES]{ 
+        &NeoConnection::DummyS,
         &NeoConnection::Success_Hello,
-        &NeoConnection::Dummy,
-        &NeoConnection::Success_Run, 
+        &NeoConnection::Success_Hello,
+        &NeoConnection::DummyS, 
+        &NeoConnection::Success_Run,
         &NeoConnection::Success_Pull,
+		&NeoConnection::Success_Record,
     };
+
+    Fail_Fn fail_handler[DRIVER_STATES]{ 
+        &NeoConnection::DummyF,
+        &NeoConnection::Fail_Hello,
+        &NeoConnection::Fail_Hello,
+        &NeoConnection::DummyF,
+        &NeoConnection::Fail_Run,
+		&NeoConnection::Fail_Pull,
+		&NeoConnection::Fail_Record,
+	};
 };

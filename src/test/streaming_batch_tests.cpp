@@ -26,7 +26,7 @@ uint64_t benchmark(const std::string& label, Func&& f, size_t iterations) {
 }
 
 int main() {
-    constexpr size_t iterations = 1'000'000;
+    constexpr size_t iterations = 10;
 
 
     // === 1. Streaming 100 Cypher packets ===
@@ -52,15 +52,15 @@ int main() {
     }, iterations);
 
     // === 2. Batched Bolt list of 10,000 items ===
-    const u16 size = 10'000;
+    const u16 size = 10;
     BoltValue bgList = BoltValue::Make_List();
     for (u16 i = 0; i < size; i++)
     {
         bgList.Insert_List(BoltValue({
             mp("id", i + 1),
             mp("score", (i + 1) * 0.1),
-            mp("tags", BoltValue({i,i+1,i+2}))
-            }));
+            mp("tags", BoltValue({i,i + 1,i + 2}, false))
+            }, false));
     } // end for
 
     // Pre-allocate reusable buffer for batch encoding
@@ -84,14 +84,14 @@ int main() {
     BoltValue::Free_Bolt_Value(bgList, true);
 
 
-    // === 4. Fun: Batch Maps of 1,000 items ===
+ //   // === 4. Fun: Batch Maps of 1,000 items ===
     const u16 size2 = 1000;
     BoltValue bgMap = BoltValue::Make_Map();
     for (u16 i = 0; i < size2; i++)
     {
         bgMap.Insert_Map("TheKey", BoltValue({
-            mp("id", BoltValue({i + 1, i + 2, i + 3}))
-            }));
+            mp("id", BoltValue({i + 1, i + 2, i + 3}, false))
+            }, false));
     } // end for
 
 	// clear previous buffer
@@ -100,6 +100,6 @@ int main() {
         batchBuf.Reset();
         encoder.Encode(bgMap);
         }, iterations);
-
+	
     return 0;
 }
