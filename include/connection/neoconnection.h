@@ -1,8 +1,8 @@
 /**
- * @file neo4j_cpl.h
+ * @brief definition of NeoConnection class.
+ * 
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
- * @brief 
  * @version 1.0
  * @date 9th of April 2025, Wednesday
  * 
@@ -24,10 +24,8 @@
 
 
 
-
-
 //===============================================================================|
-//          ENUM
+//          ENUM & TYPES
 //===============================================================================|
 /**
  * LightningBolt states over bolt
@@ -45,8 +43,7 @@ enum class BoltState : u8 {
 };
 constexpr int DRIVER_STATES = 9;
 
-
-
+//===============================================================================|
 /**
  * @brief this structure is used to track the state of query opereration esp during
  *  pipelined calls. It also stores a pointer to a callback function that is requesting
@@ -69,7 +66,7 @@ struct BoltQueryStateInfo
     BoltMessage fields;
 };
 
-
+//===============================================================================|
 /**
  * @brief a view points at the next row/value to decode in a single
  *  bolt request/query. Since Bolt returns pipelined requests in the order
@@ -82,6 +79,19 @@ struct BoltView
     size_t size;                // the size of view into buffer
     BoltMessage field_names;    // meta info on query usually the field names or labels
     BoltMessage summary_meta;   // summary meta info trailing at the end of records
+};
+
+//===============================================================================|
+/**
+ * @brief the result of a bolt query. It consists of three fields, the fields
+ *  names for the query result, a list of records, and a summary detail, as per
+ *  driver specs for neo4j
+ */
+struct BoltResult
+{
+	BoltValue fields;           // the field names for the record
+    BoltValue records;          // the actual list of records returned
+    BoltValue summary;          // the summary message at end of records
 };
 
 
@@ -100,8 +110,9 @@ public:
     void Stop();
 
     int Run_Query(const char* cypher, BoltValue params=BoltValue::Make_Map(),
-        BoltValue extras = BoltValue::Make_Map());
+        BoltValue extras = BoltValue::Make_Map(), const int chunks = -1);
     int Fetch(BoltMessage& out);
+    int Fetch(BoltResult& res);
 
     int Begin_Transaction(const BoltValue& options = BoltValue::Make_Map());
     int Commit_Transaction(const BoltValue& options = BoltValue::Make_Map());
@@ -109,10 +120,8 @@ public:
 
     void Set_State(BoltState s);
     BoltState Get_State() const;
-    u64 Client_ID() const;
-
+    u64 Get_Client_ID() const;
     std::string Get_Last_Error() const;
-    std::string Dump_Msg() const;
     std::string State_ToString() const;
 
 private: 
@@ -141,24 +150,23 @@ private:
 
     // utilities
     void Close_Driver();
-    int Negotiate_Version();
-    int Send_Hellov4();
-    int Send_Hellov5();
-	int Send_Hello();
-    void Encode_Pull();
+    void Encode_Pull(const int n);
+
+    
 
     int Poll_Readable();
     void Poll_Writable();
     void Flush();
+
     int Decode_Response(u8* view, const size_t bytes);
     bool Recv_Completed(const size_t bytes);
 
+    int Negotiate_Version();
+    int Send_Hellov4();
+    int Send_Hellov5();
+    int Send_Hello();
 
-    void Run_Read(std::shared_ptr<BoltRequest> req);
-    void Run_Write(std::shared_ptr<BoltRequest> req);
-    size_t Extract_Bolt_Message_Length(const u8* view, size_t available);
-
-    
+    inline bool Handle_Hello();
 
     int DummyS(u8* view, const size_t bytes);
     int Success_Hello(u8* view, const size_t bytes);

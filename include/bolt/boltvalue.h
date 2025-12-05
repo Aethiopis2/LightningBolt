@@ -1,10 +1,9 @@
 /**
- * @file bolt_message.h
- * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
- * 
  * @brief defintion of BoltValue that is an abstraction of neo4j types defined in
  *  boltprotocol using PackStream format. The goal here is to come up with a structure
  *  that abstracts neo4j types without sacrificing speed and making excessive copy.
+ * 
+ * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
  * @version 1.0
  * @date 16th of April 2025, Sunday.
@@ -65,7 +64,9 @@ constexpr u8 BOLT_STRUCT8      = 0xDC;
 constexpr u8 BOLT_STRUCT16     = 0xDD;
 
 
-// bolt message types
+/* 
+ * Bolt message types
+ */
 constexpr u8 BOLT_HELLO         = 0x01;
 constexpr u8 BOLT_GOODBYE       = 0x02;
 constexpr u8 BOLT_ACK_FAILURE   = 0x0E;
@@ -86,11 +87,6 @@ constexpr u8 BOLT_IGNORED       = 0x7E;
 constexpr u8 BOLT_FAILURE       = 0x7F;
 
 
-
-
-//===============================================================================|
-//          TYPES
-//===============================================================================|
 /**
  * Neo4j types:
  */
@@ -110,15 +106,15 @@ enum class BoltType : std::uint8_t
 
 
 
-
 //===============================================================================|
 //          TYPES
 //===============================================================================|
 /**
- * @brief A union-based structure representing various Bolt protocol value types. It supports 
- *  multiple data types used in the Bolt protocol, including integers, floats, booleans, strings, 
- *  byte arrays, lists, maps, and structs. It utilizes a union to store these types efficiently, 
- *  along with a type identifier (BoltType) to determine the active member of the union.
+ * @brief A union-based structure representing various Bolt protocol value types. 
+ *  It supports multiple data types used in the Bolt protocol, including integers, 
+ *  floats, booleans, strings, byte arrays, lists, maps, and structs. It utilizes 
+ *  a union to store these types efficiently, along with a type identifier (BoltType) 
+ *  to determine the active member of the union.
  * 
  * - `type`: Specifies the data type of the value (e.g., Int, Bool, String).
  * - `padding`: Ensures proper alignment of the union members.
@@ -133,22 +129,19 @@ enum class BoltType : std::uint8_t
  *   - `map_val`: A structure representing a map with key-value pairs (heterogeneous).
  *   - `struct_val`: A structure representing a Bolt struct with fields and a tag.
  * 
- * The structure supports several constructors and factory methods for creating Bolt values 
- *  from different types, including basic types (e.g., bool, int, double), strings, lists, maps, 
- *  and structs. It also provides a method for generating human-readable textual representations 
- *  of the value (`ToString`).
+ * The structure supports several constructors and factory methods for creating Bolt 
+ *  values from different types, including basic types (e.g., bool, int, double), strings, 
+ *  lists, maps, and structs. It also provides a method for generating human-readable 
+ *  textual representations of the value (`ToString`).
  */
 struct BoltValue
 {
-    BoltType type;
+	BoltType type;                        // type of value stored
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
 	bool disposable = false;              // indicates if the value should be disposed
 	u64 insert_count = 0;                 // count of insertions for tracking
     u8 padding[2];
 
-    /**
-     * @brief the union holding various neo4j bolt types
-	 */
     union 
     {
         s64 int_val;
@@ -210,7 +203,7 @@ struct BoltValue
 
     //===============================================================================|
     /** 
-     * @brief 
+	 * @brief a constructor for boolean values.
      */
     BoltValue(bool b)
     {
@@ -220,7 +213,7 @@ struct BoltValue
 
     //===============================================================================|
     /** 
-     * @brief 
+	 * @brief a constructor for integer values.
      */
     BoltValue(int i)
     {
@@ -230,7 +223,7 @@ struct BoltValue
 
     //===============================================================================|
     /** 
-     * @brief
+	 * @brief a constructor for integer values.
      */
     BoltValue(s64 i)
     {
@@ -240,7 +233,7 @@ struct BoltValue
 
     //===============================================================================|
     /** 
-     * @brief
+	 * @brief a constructor for double values.
      */
     BoltValue(double d)
     {
@@ -250,7 +243,7 @@ struct BoltValue
 
     //===============================================================================|
     /** 
-     * @brief
+	 * @brief a constructor for C style (me prefers this) string values.
      */
     BoltValue(const char* str)
     {
@@ -261,7 +254,7 @@ struct BoltValue
 
     //===============================================================================|
     /**
-     * @brief
+	 * @brief a constructor for string values.
      */
     BoltValue(const std::string& str)
     {
@@ -272,7 +265,7 @@ struct BoltValue
 
     //===============================================================================|
     /**
-     * @brief
+	 * @brief a constructor for neo4j map types
      */
     BoltValue(std::pair<const char*, BoltValue> v, const bool disp = true)
 		: type(BoltType::Map), disposable(disp)
@@ -295,6 +288,9 @@ struct BoltValue
     /**
      * @brief initializer constructor for neo4j List types 
      *  with heterogeneous data.
+     * 
+	 * @param init the initializer list
+	 * @param disp indicates if disposable
      */
     BoltValue(std::initializer_list<BoltValue> init, const bool disp = true)
 		: type(BoltType::List), disposable(disp)
@@ -318,8 +314,12 @@ struct BoltValue
     /**
      * @brief initializer for noe4j dictionary types
      *  or what I like to call maps.
+     * 
+	 * @param init the initializer list of key value pairs
+	 * @param disp indicates if disposable
      */
-    BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init, const bool disp = true)
+    BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init, 
+        const bool disp = true)
 		: type(BoltType::Map), disposable(disp)
     {
         if (!pool)
@@ -343,11 +343,13 @@ struct BoltValue
 
     //===============================================================================|
     /**
-     * @brief initializer for neo4j struct types. All other compund
-     *  types such as nodes and relataionships build on this struct. 
+     * @brief initializer for neo4j struct types. All other compund types such as nodes 
+     *  and relataionships build on this struct. 
      * 
      * @param tag identifier/signature of the structure according
      *  neo4j bolt specs.
+	 * @param init the initializer list of bolt values
+	 * @param disp indicates if disposable
      */
     BoltValue(u8 tag, std::initializer_list<BoltValue> init, const bool disp = true)
         :type(BoltType::Struct), disposable(disp)
@@ -376,6 +378,7 @@ struct BoltValue
     {
         if (pool && disposable)
         {
+			// snip out the inserted values
             while (insert_count-- > 0)
                 Free_Bolt_Value(*this);
 
@@ -385,7 +388,7 @@ struct BoltValue
 
     //===============================================================================|
     /**
-     * @brief operator overloading for list types
+     * @brief overloaded brace - () operator for list and struct types
      * 
 	 * @param index the index to access
 	 */ 
@@ -467,7 +470,6 @@ struct BoltValue
                     if (out_key.ToString().length() == length && 
                         !strncmp(out_key.ToString().c_str(), key, length))
                     {
-                        //std::cout << std::string(out_val.str_val.str, out_val.str_val.length) << '\n';
                         return out_val;
                     }
                 } // end if decoded
@@ -490,6 +492,106 @@ struct BoltValue
 
         return BoltValue::Make_Unknown();
     } // end operator[]
+
+    //===============================================================================|
+    /**
+     * @brief template method to get the value stored in the BoltValue union.
+     * 
+     * @tparam T the type to convert to
+     * 
+     * @return T the converted type
+	 */
+	template<typename T>
+    T Get()
+    {
+        switch(type)
+        {
+        case BoltType::Bool:
+            return static_cast<T>(bool_val);
+        case BoltType::Int:
+            return static_cast<T>(int_val);
+        case BoltType::Float:
+            return static_cast<T>(float_val);
+		case BoltType::String:
+			return std::string(str_val.str, str_val.length);
+        case BoltType::List:
+			return static_cast<T>(list_val);
+		case BoltType::Map:
+			return static_cast<T>(map_val);
+        case BoltType::Struct:
+			return static_cast<T>(struct_val);
+        default:
+            return T{};
+		} // end switch
+    } // end Get
+
+    //===============================================================================|
+    /**
+     * @brief Converts the BoltValue to a human-readable string representation.
+     *  The actual string representation depends on the type of the value.
+     *
+     * @return std::string representing the BoltValue.
+     */
+    std::string ToString() const
+    {
+        return str_jump[static_cast<u8>(type)](this);
+    } // end ToString
+
+    //===============================================================================|
+    /**
+     * @brief inserts a value into the list at the start of the offset by
+     *  shifting existing values to the right.
+     *
+     * @param v the bolt value to insert
+     */
+    void Insert_List(BoltValue v)
+    {
+        if (type != BoltType::List)
+            return;
+
+        BoltValue val = v;  // prevents opt outs
+        Insert(val, list_val.offset);
+        list_val.size++;
+    } // end Add_List
+
+    //===============================================================================|
+    /**
+     * @brief inserts a key-value pair into the map at the begining of the pool
+     *  by shifting existing values to the right.
+     *
+     * @param key the key to insert
+     * @param value the value to insert
+     */
+    void Insert_Map(BoltValue key, BoltValue value)
+    {
+        if (type != BoltType::Map)
+            return;
+
+        BoltValue k = key;      // prevents opt outs
+        BoltValue val = value;  // prevents opt outs
+
+        Insert(val, map_val.key_offset + map_val.size);
+        Insert(k, map_val.key_offset);
+        map_val.value_offset++;
+        map_val.size++;
+    } // end Insert_Map 
+
+    //===============================================================================|
+    /**
+     * @brief inserts a field into the struct at the start of the offset by
+     *  shifting existing values to the right.
+     *
+     * @param v the bolt value to insert
+     */
+    void Insert_Struct(BoltValue v)
+    {
+        if (type != BoltType::Struct)
+            return;
+
+        BoltValue val = v;  // prevents opt outs
+        Insert(val, struct_val.offset);
+        struct_val.size++;
+    } // end Add_Struct
 
     //===============================================================================|
     /* Small factories */
@@ -617,23 +719,6 @@ struct BoltValue
 
     //===============================================================================|
     /**
-	 * @brief inserts a value into the list at the start of the offset by
-	 *  shifting existing values to the right.
-     * 
-     * @param v the bolt value to insert
-	 */
-    void Insert_List(BoltValue v)
-    {
-        if (type != BoltType::List)
-            return;
-
-        BoltValue val = v;  // prevents opt outs
-        Insert(val, list_val.offset);
-        list_val.size++;
-    } // end Add_List
-
-    //===============================================================================|
-    /**
      * @brief factory for maps
      * 
      * @param offset into the pool
@@ -651,29 +736,7 @@ struct BoltValue
 
     //===============================================================================|
     /**
-	 * @brief inserts a key-value pair into the map at the begining of the pool 
-	 *  by shifting existing values to the right.
-     * 
-     * @param key the key to insert
-	 * @param value the value to insert
-     */ 
-    void Insert_Map(BoltValue key, BoltValue value)
-    {
-        if (type != BoltType::Map)
-            return;
-
-		BoltValue k = key;      // prevents opt outs
-		BoltValue val = value;  // prevents opt outs
-
-        Insert(val, map_val.key_offset + map_val.size);
-        Insert(k, map_val.key_offset);
-        map_val.value_offset++;
-        map_val.size++;
-	} // end Insert_Map 
-
-    //===============================================================================|
-    /**
-     * @brief factor for maps
+     * @brief factory for maps
      */
     static BoltValue Make_Map()
     {
@@ -726,23 +789,6 @@ struct BoltValue
 
     //===============================================================================|
     /**
-	 * @brief inserts a field into the struct at the start of the offset by
-	 *  shifting existing values to the right.
-     * 
-	 * @param v the bolt value to insert
-     */
-    void Insert_Struct(BoltValue v)
-    {
-        if (type != BoltType::Struct)
-            return;
-
-        BoltValue val = v;  // prevents opt outs
-        Insert(val, struct_val.offset);
-        struct_val.size++;
-	} // end Add_Struct
-
-    //===============================================================================|
-    /**
      * @brief unknown factory
      */
     static BoltValue Make_Unknown()
@@ -771,18 +817,6 @@ struct BoltValue
         else if (val.type == BoltType::Struct && !val.struct_val.is_decoded)
             val.pool->Release(clear_all);
     } // end FreeBoltValue
-
-    //===============================================================================|
-    /**
-     * @brief Converts the BoltValue to a human-readable string representation.
-     *  The actual string representation depends on the type of the value.
-     *
-     * @return std::string representing the BoltValue.
-     */
-    std::string ToString() const
-    {
-        return str_jump[static_cast<u8>(type)](this);
-    } // end ToString
 
     //===============================================================================|
     /**
@@ -877,7 +911,8 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief Converts a BoltValue byte array to a human-readable string representation.
-     *  The byte array is represented as a comma-separated list of hexadecimal values enclosed in square brackets.
+     *  The byte array is represented as a comma-separated list of hexadecimal values 
+     *  enclosed in square brackets.
      * 
      * @param ptr Pointer to the BoltValue representing the byte array.
      * @return std::string representing the BoltValue byte array.
@@ -904,7 +939,8 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief Converts a BoltValue list to a human-readable string representation.
-     *  The list is represented as a comma-separated list of values enclosed in square brackets.
+     *  The list is represented as a comma-separated list of values enclosed in square 
+     *  brackets.
      * 
      * @param pval Pointer to the BoltValue representing the list.
      * @return std::string representing the BoltValue list.
@@ -945,7 +981,8 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief Converts a BoltValue map to a human-readable string representation.
-     *  The map is represented as a comma-separated list of key-value pairs enclosed in curly braces.
+     *  The map is represented as a comma-separated list of key-value pairs enclosed 
+     *  in curly braces.
      * 
      * @param pval Pointer to the BoltValue representing the map.
      * @return std::string representing the BoltValue map.
@@ -991,7 +1028,8 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief Converts a BoltValue struct to a human-readable string representation.
-     *  The struct is represented as a comma-separated list of fields enclosed in curly braces.
+     *  The struct is represented as a comma-separated list of fields enclosed in curly 
+     *  braces.
      * 
      * @param pval Pointer to the BoltValue representing the struct.
      * @return std::string representing the BoltValue struct.
@@ -1114,8 +1152,8 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief Converts a BoltValue Relationship to a human-readable string representation.
-     *  The Relationship is represented with its ID, start node ID, end node ID, type, properties,
-     *  element ID, and start/end node element IDs.
+     *  The Relationship is represented with its ID, start node ID, end node ID, type, 
+     *  properties, element ID, and start/end node element IDs.
      * 
      * @param ptr Pointer to the BoltValue representing the Relationship.
      * 
@@ -1150,8 +1188,9 @@ struct BoltValue
 
     //===============================================================================|
     /**
-     * @brief Converts a BoltValue UnboundRelationship to a human-readable string representation.
-     *  The UnboundRelationship is represented with its ID, type, properties, and element ID.
+     * @brief Converts a BoltValue UnboundRelationship to a human-readable string 
+     *  representation. The UnboundRelationship is represented with its ID, type, 
+     *  properties, and element ID.
      * 
      * @param ptr Pointer to the BoltValue representing the UnboundRelationship.
      * 
@@ -1264,7 +1303,8 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief Converts a BoltValue DateTime to a human-readable string representation.
-     *  The DateTime is represented with its seconds since epoch, nanoseconds, and timezone offset in seconds.
+     *  The DateTime is represented with its seconds since epoch, nanoseconds, and 
+     *  timezone offset in seconds.
      * 
      * @param ptr Pointer to the BoltValue representing the DateTime.
      * 
@@ -1287,8 +1327,9 @@ struct BoltValue
 
     //===============================================================================|
     /**
-     * @brief Converts a BoltValue DateTimeTimeZoneId to a human-readable string representation.
-     *  The DateTimeTimeZoneId is represented with its seconds since epoch, nanoseconds, and timezone ID.
+     * @brief Converts a BoltValue DateTimeTimeZoneId to a human-readable string 
+     *  representation. The DateTimeTimeZoneId is represented with its seconds since 
+     *  epoch, nanoseconds, and timezone ID.
      * 
      * @param ptr Pointer to the BoltValue representing the DateTimeTimeZoneId.
      * 
@@ -1464,7 +1505,6 @@ struct BoltValue
 		bov->disposable = true;
         bov->insert_count++;
     } // end Insert
-
 
     // jump table for to_string parsing based on type
     using ToStr = std::string (*)(const BoltValue *);

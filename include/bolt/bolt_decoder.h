@@ -69,6 +69,24 @@ public:
         buf.Consume(size);
     } // end Decode
 
+
+    int Decode(u8* view_start, BoltValue& v)
+    {
+        u16 chunk = htons(((u16*)view_start)[0]);
+        u8* pos = view_start + 2;
+
+        while (chunk > (pos - view_start))
+        {
+            u8 tag = *pos;
+            if (!jump_table[tag](pos, v))
+            {
+                error_string = "Unexpected tag: " + std::to_string(tag);
+                return -1;
+            } // end if
+        } // end while
+
+        return 0;
+    } // end Decode
     
     /**
      * 

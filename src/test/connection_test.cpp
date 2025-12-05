@@ -74,9 +74,7 @@ int main()
             if (ret == -1)
 				Dump_Err_Exit("Failed to connect to the server");
 			else 
-				Dump_App_Err(con.Get_Last_Error().c_str());
-
-            return 0;
+				Fatal(con.Get_Last_Error().c_str());
         } // end if 
             
 
@@ -89,10 +87,10 @@ int main()
                 auto start = std::chrono::high_resolution_clock::now();
                 con.Run_Query(test.cypher[k]);
 
-                BoltMessage out;
+                BoltResult out;
                 int ret;
-                while ((ret = con.Fetch(out)) > 0);
-                     //Print("%s", out.ToString().c_str());
+                ret = con.Fetch(out);
+                //Print("%s", out.records.ToString().c_str());
 
                 if (ret < 0)
                 {
@@ -102,6 +100,7 @@ int main()
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+                BoltValue::Free_Bolt_Value(out.records);
             } // end nested for
 
             if (!durs.empty()) 
