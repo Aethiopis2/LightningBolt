@@ -67,7 +67,9 @@ void Print(const char *s, ...);
 std::string Console_Out(const std::string app_name = APP_NAME);
 std::string Generate_UUID();
 void Print_Title(const std::string coname = "Panacea Solutions, Plc", 
-    const std::string url = "http://www.lone_star_rises.panaceasolutions.com");
+    const std::string url = "Email: PanaceaSolutionsEth@Gmail.com");
 void Swap(u64 *num);
+void String_ToLower(char* str, const size_t len);
+void String_ToUpper(char* str, const size_t len);
 
 #endif

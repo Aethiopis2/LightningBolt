@@ -78,8 +78,6 @@ int Init_Configuration(const std::string &filename, SYS_CONFIG &sys_config)
     return 0;
 } // end Init_Configuration
 
-
-
 //=====================================================================================|
 /**
  * @brief Splits a string using the sz_token provided and returns them as vector of strings
@@ -100,8 +98,6 @@ std::vector<std::string> Split_String(const std::string &str, const char tokken)
 
     return vec;
 } // end Split_String
-
-
 
 //=====================================================================================|
 /**
@@ -170,8 +166,6 @@ void Dump_Hex(const char* buf, size_t len)
     std::cout << "\n";
 } // end Dump_Hex
 
-
-
 //=====================================================================================|
 /**
  * @brief Formats the date and time for displaying on the screen; so that my applications
@@ -192,8 +186,6 @@ std::string Get_Formatted_String(const std::string &app_name)
     return buf;
 } // end display_time
 
-
-
 //=====================================================================================|
 /**
  * @brief Neatly replaces the string patt from str using the string replace. It basically
@@ -213,8 +205,6 @@ void Replace_String(std::string &str, const std::string &patt, const std::string
             str.substr(pos + patt.length(), str.length() - pos);
     } // end find
 } // end Replace_String
-
-
 
 //=====================================================================================|
 /**
@@ -251,8 +241,6 @@ std::string Format_Numerics(const double num)
     return s;
 } // end Format_Numerics
 
-
-
 //=====================================================================================|
 /**
  * @brief Determines if the string s is a number or not.
@@ -267,8 +255,6 @@ bool Is_Number(const std::string &s)
     return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) 
         { return !isdigit(c); }) == s.end();
 } // end Is_Number
-
-
 
 //=====================================================================================|
 /**
@@ -287,8 +273,6 @@ void Print(const char *s, ...)
     printf("%s%s\n", Get_Formatted_String().c_str(), buf);
     va_end(arg_list);
 } // end Print
-
-
 
 //=====================================================================================|
 /**
@@ -309,8 +293,6 @@ std::string Console_Out(const std::string app_name)
 
     return buf;
 } // end display_time
-
-
 
 //=====================================================================================|
 /**
@@ -344,8 +326,6 @@ std::string Generate_UUID()
     return uuid;
 } // end Generate_UUID
 
-
-
 //=====================================================================================|
 /**
  * @brief Prints title; i.e. company name and website info among other things.
@@ -356,8 +336,6 @@ void Print_Title(const std::string coname, const std::string url)
     std::cout << "\n\t     \033[36m" << coname << "\033[37m\n"
         << "\t\t\033[34m" << url << "\033[037m\n" << std::endl;
 } // end Print_Ttile
-
-
 
 //=====================================================================================|
 /**
@@ -381,3 +359,33 @@ void Swap(u64 *num)
     ptr[1] = ptr[4];
     ptr[4] = swap; 
 } // end Swap
+
+//=====================================================================================|
+/**
+ * @brief converts a everything alphabetic in the string str to lower case. The function
+ *  performs inplace conversion
+ * 
+ * @param str the string to convert and store
+ * @param len length of the string
+ */
+void String_ToLower(char* str, const size_t len)
+{
+    // loop and convert each char
+    for (size_t i = 0; i < len; i++)
+        str[i] = tolower((unsigned char)str[i]);
+} // end String_ToLower
+
+//=====================================================================================|
+/**
+ * @brief converts a everything alphabetic in the string str to upper case. The function
+ *  performs inplace conversion like its buddy above
+ *
+ * @param str the string to convert and store
+ * @param len length of the string
+ */
+void String_ToUpper(char* str, const size_t len)
+{
+    // loop and convert each char
+    for (size_t i = 0; i < len; i++)
+        str[i] = toupper((unsigned char)str[i]);
+} // end String_ToLower

@@ -23,7 +23,6 @@
 
 
 
-
 //===============================================================================|
 //          CLASS
 //===============================================================================|
@@ -36,10 +35,8 @@
  */
 NeoConnection::NeoConnection(BoltValue connection_params, const u64 cli_id)
     :encoder(write_buf), decoder(read_buf), conn_params(connection_params),
-    state(BoltState::Disconnected)
+     client_id(cli_id), state(BoltState::Disconnected)
 {
-	conn_params.disposable = true;      // mark disposable for cleanup
-
 	// split host and port from the host param
 	std::vector<std::string> temp{ Split_String(
         connection_params["host"].ToString(), ':') };
@@ -47,9 +44,12 @@ NeoConnection::NeoConnection(BoltValue connection_params, const u64 cli_id)
 	hostname = temp[0];
 	port = (temp.size() > 1) ? temp[1] : "7687";
  
-	client_id = cli_id;
     current_qid = 0;
 	num_queries = 0;
+    transaction_count = 0;
+    bytes_to_decode = 0;
+    has_more = true;
+    err_string = "";
 } // end NeoConnection
 
 //===============================================================================|
@@ -75,41 +75,36 @@ bool NeoConnection::Is_Closed() const
 //===============================================================================|
 /**
  * @brief start's a connection to a neo4j database server using bolt protocol. 
- *  Function begins by TCP connecting with server and continues to negotiate supported
- *  version followed by hello request that varies depending on the versions supported. 
- *  LightingingBolt driver supports versions 5.x, 4.x, 3.x (for the most part)
+ *  Function begins by TCP connecting with server and then negotiates a supported
+ *  version followed by hello request that depends on the versions supported. 
+ * 
+ *  LightingingBolt driver supports versions 6.0, 5.x, 4.x, 3.x (for the most part)
  *  of the bolt protocol.
  * 
- * @return 0 on success. -1 on system error while -2 for application specific errors
+ * @return 0 on success. -1 on sys error while -2 for app specific errors
  */
 int NeoConnection::Start()
 {
-    int ret;
-    if ( (ret = Connect()) < 0)
-        return -1;
-
-    if ( (ret = Negotiate_Version()) < 0)
+    if (Connect() < 0)
         return -1;
 
     Set_State(BoltState::Connecting);
-
-    if (ret == 5)                   // use version 5 hello
-        ret = Send_Hellov5();
-    else if (ret >= 3)              // version 4 and below
-        ret = Send_Hellov4();
-    else if (ret >= 1)
-		ret = Send_Hello();         // legacy v2/v1 hello
-    else
+    if (int ret; (ret = Negotiate_Version()) >= 0)
     {
-		err_string = "unsupported negotiated version";
-		return -2;
-	} // end else
-    
-    // wait on response 
-    if (!Handle_Hello())
-        return -2;
+        if (ret == 6 || ret == 5)   // use version 6/5 hello
+            ret = Send_Hellov5();
+        else if (ret >= 1)          // version 4 and below 
+            ret = Send_Hellov4();
+        else
+        {
+            err_string = "unsupported negotiated version";
+            Close_Driver();
+            return -2;
+        } // end else
+    } // end if Negoitate
 
-    return 0;
+    // wait on response 
+    return Poll_Readable();
 } // end Start
 
 //===============================================================================|
@@ -121,16 +116,8 @@ void NeoConnection::Stop()
     if (Get_State() != BoltState::Disconnected)
     {
         // would be ignored if not supported anyways
-        Set_State(BoltState::Connecting);
-        BoltMessage off(BoltValue(BOLT_LOGOFF, {}));
-        encoder.Encode(off);
-
-        Flush();
-        Poll_Readable();
-
-        BoltMessage gb(BoltValue(BOLT_GOODBYE, {}));
-        encoder.Encode(gb);
-        Flush();
+        Logoff();
+        Goodbye();
     } // end if not connecting
 
     Close_Driver();
@@ -218,111 +205,6 @@ int NeoConnection::Fetch(BoltMessage& out)
 } // end Fetch
 
 //===============================================================================|
-int NeoConnection::Fetch(BoltResult& res)
-{
-    BoltMessage rsp;
-    bool should_poll = true;
-    int skip = 0;
-    int rows = 0;
-
-    do
-    {
-        has_more = true;
-        if (int ret; should_poll && (ret = Poll_Readable()) < 0)
-            return ret;
-
-        if (state == BoltState::Run)
-        {
-            skip = decoder.Decode(view.cursor, rsp);
-            res.fields = rsp.msg(0)["fields"];   // extract it out
-
-            // is this message a fail or ignored?
-            if (rsp.msg.struct_val.tag == BOLT_FAILURE)
-            {
-                err_string = rsp.msg.ToString();
-                return -2;
-            } // end if error 
-            else if (rsp.msg.struct_val.tag == BOLT_IGNORED)
-            {
-                // drain additional messages, and send RESET
-                view.cursor += skip;
-                if (skip >= view.size)
-                {
-                    // reset
-                    //Reset();
-                    return 0;   // ready for next query
-                } // end if
-
-                should_poll = false;
-                continue;
-            } // end else if
-
-            // is the record on a piggy ride as well?
-            if (skip >= view.size)
-                should_poll = true;
-            else should_poll = false;
-
-            Set_State(BoltState::Pull);
-        } // end if
-        else if (state == BoltState::Pull)
-        {
-            // expecting a record info or an error, parse the very first 
-            //  item anyways before changing state and trying again
-            skip = decoder.Decode(view.cursor, rsp);
-            view.cursor += skip;
-
-            // is this message a fail or ignored?
-            if (rsp.msg.struct_val.tag == BOLT_FAILURE)
-            {
-                err_string = rsp.msg.ToString();
-                return -2;
-            } // end if error 
-
-            // is the record on a piggy ride as well?
-            if (skip >= view.size)
-                should_poll = true;
-            else should_poll = false;
-
-            res.records = BoltValue::Make_List();
-            res.records.Insert_List(rsp.msg);
-            ++rows;
-
-            Set_State(BoltState::Streaming);
-        } // end else if pull
-        else if (state == BoltState::Streaming)
-        {
-            // finally the streaming stage, let's hit the buffer
-            skip = decoder.Decode(view.cursor, rsp);
-            view.cursor += skip;
-
-            // is the record on a piggy ride as well?
-            if (skip >= view.size)
-                should_poll = true;
-            else should_poll = false;
-
-            // is this message a success, fail or ignored?
-            if (rsp.msg.struct_val.tag == BOLT_SUCCESS)
-            {
-                res.summary = rsp.msg;
-                Set_State(BoltState::Ready);
-                read_buf.Reset();
-                return 0;
-            } // end if success
-            else if (rsp.msg.struct_val.tag == BOLT_FAILURE)
-            {
-                err_string = rsp.msg.ToString();
-                return -2;
-            } // end if error 
-
-            // get the next pool item
-            res.records.Insert_List(rsp.msg);
-        } // end else if
-    } while (1);
-
-    return 0;
-} // end Fetch
-
-//===============================================================================|
 /**
  * @brief Begins a transaction with the database, this is a manual transaction
  *  that requires commit or rollback to finish.
@@ -333,12 +215,8 @@ int NeoConnection::Fetch(BoltResult& res)
  */
 int NeoConnection::Begin_Transaction(const BoltValue& options)
 {
-    BoltState s = Get_State();
-    if (s != BoltState::Ready)
-    {
-        err_string = "invalid state: " + State_ToString();
-        return -2;  // app error
-    } // end if
+    if (transaction_count++ > 0)
+        return 0;       // already has some
 
     BoltMessage begin(
         BoltValue(BOLT_BEGIN, {
@@ -365,12 +243,8 @@ int NeoConnection::Begin_Transaction(const BoltValue& options)
  */
 int NeoConnection::Commit_Transaction(const BoltValue& options)
 {
-    BoltState s = Get_State();
-    if (s != BoltState::Trx)
-    {
-        err_string = "invalid state: " + State_ToString();
-        return -2;  // app error
-    } // end if
+    if (transaction_count-- > 0)
+        return 0;       // got a few more
 
     BoltMessage commit(
         BoltValue(BOLT_COMMIT, {
@@ -397,12 +271,8 @@ int NeoConnection::Commit_Transaction(const BoltValue& options)
  */
 int NeoConnection::Rollback_Transaction(const BoltValue& options)
 {
-    BoltState s = Get_State(); 
-    if (s != BoltState::Trx)
-    {
-        err_string = "invalid state: " + State_ToString();
-        return -2;  // app error
-    } // end if
+    if (transaction_count-- > 0)
+        return 0;       // not yet
 
     BoltMessage rollback(
         BoltValue(BOLT_ROLLBACK, {
@@ -416,6 +286,115 @@ int NeoConnection::Rollback_Transaction(const BoltValue& options)
     Poll_Readable();
     return 0;
 } // end Rollback_Transaction
+
+//===============================================================================|
+/*@brief encodes a PULL message and sends it. Useful during reactive style fetch
+*
+* @param n the number of chunks to to fetch at once, defaulted to - 1 to fetch
+* everything.
+* 
+* @return 0 on success -1 on sys error, left for caller to decide its fate
+*/
+int NeoConnection::Pull(const int n)
+{
+    Encode_Pull(n);
+    if (!Flush())
+        return -1;
+
+    return 0;
+} // end Pull
+
+//===============================================================================|
+int NeoConnection::Reset()
+{
+    if (state != BoltState::Error || state != BoltState::Ready)
+        return 0;
+
+    BoltValue bv(BOLT_RESET, {});
+    if (!Flush_And_Poll(bv))
+        return -1;
+
+    return 0;
+} // end Reset
+
+//===============================================================================|
+int NeoConnection::Discard(const int n)
+{
+    if (state != BoltState::Streaming)
+        return 0;       // ignore
+
+    BoltValue bv(BOLT_DISCARD, {
+        BoltValue({
+            mp("n", n),
+            mp("qid", (int)client_id)
+            })
+        });
+
+    if (!Flush_And_Poll(bv))
+        return -1;
+
+    return 0;
+} // end Discard
+
+//===============================================================================|
+int NeoConnection::Telemetry(const int api)
+{
+    if (state != BoltState::Ready)
+        return 0;       // ignore
+
+    BoltValue bv(BOLT_TELEMETRY, { api });
+    if (!Flush_And_Poll(bv))
+        return -1;
+
+    return 0;
+} // end Telemetry
+
+//===============================================================================|
+int NeoConnection::Logoff()
+{
+    if (state == BoltState::Disconnected)
+        return 0;       // ignore
+
+    Set_State(BoltState::Connecting);
+    BoltMessage off(BoltValue(BOLT_LOGOFF, {}));
+    encoder.Encode(off);
+
+    if (!Flush())
+        return -1;
+
+    Close_Driver();
+    return 0;
+} // end Logoff
+
+//===============================================================================|
+int NeoConnection::Goodbye()
+{
+    if (state == BoltState::Disconnected)
+        return 0;       // already done
+
+    BoltValue gb(BoltValue(BOLT_GOODBYE, {}));
+    encoder.Encode(gb);
+
+    if (!Flush())
+        return -1;
+
+    Close_Driver();
+    Set_State(BoltState::Disconnected);
+    return 0;
+} // end Goodbye
+
+//===============================================================================|
+int NeoConnection::Ack_Failure()
+{
+    if (state != BoltState::Error)
+        return 0;       // already done
+
+    BoltValue ack(BoltValue(BOLT_ACK_FAILURE, {}));
+    if (!Flush_And_Poll(ack))
+        return -1;
+
+    return 0;
+} // end Failure
 
 //===============================================================================|
 /**
@@ -463,7 +442,7 @@ std::string NeoConnection::State_ToString() const
 {
     static std::string states[DRIVER_STATES]{
         "Disconnected", "Connecting","LOGON", "Ready", 
-        "Run", "Pull", "Streaming", "Trx", "Error"
+        "Run", "Pull", "Streaming", "Error"
     };
 
     u8 s = static_cast<u8>(Get_State());
@@ -489,20 +468,29 @@ void NeoConnection::Close_Driver()
 
 //===============================================================================|
 /**
- * @brief encodes a PULL message after a RUN command to fetch all results.
+ * @brief sends the contents of write buffer to the connected peer.
  *
- * @param n the number of chunks to to fetch at once, defaulted to -1 to fetch
- *  everything.
+ * @return a true on success alas false
  */
-void NeoConnection::Encode_Pull(const int n)
+bool NeoConnection::Poll_Writable()
 {
-    BoltMessage pull(BoltValue(
-        BOLT_PULL, {
-            {mp("n", n), mp("qid",-1)}
-        }));
+    while (!write_buf.Empty())
+    {
+        ssize_t n = Send(write_buf.Read_Ptr(), write_buf.Size());
+        if (n <= 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return false;
 
-    encoder.Encode(pull);
-} // end Send_Pull
+            Stop();
+            return false;
+        } // end if
+
+        write_buf.Consume(n);
+    } // end while
+
+    return true;
+} // end Poll_Writable
 
 //===============================================================================|
 /**
@@ -520,15 +508,12 @@ int NeoConnection::Poll_Readable()
     if (read_buf.Writable_Size() < 256)
         read_buf.Grow(read_buf.Capacity() * 2);
 
-    int ret = 0;
     while (has_more)
     {
         ssize_t n = Recv(read_buf.Write_Ptr(), read_buf.Writable_Size());
         if (n <= 0)
         {
-            if (n == 0)
-                break;
-            else if (errno == EINTR)
+            if (n == 0 || errno == EINTR)
                 continue;
             else
             {
@@ -541,21 +526,96 @@ int NeoConnection::Poll_Readable()
         bytes_to_decode += n;
         if (Recv_Completed(bytes_to_decode))
         {
-            view.cursor = read_buf.Read_Ptr();
-            view.offset = 0;
-            view.size = bytes_to_decode;
+            if (!Decode_Response(read_buf.Read_Ptr(), bytes_to_decode))
+                return -2;
 
-            //ret = Decode_Response(read_buf.Read_Ptr(), bytes_to_decode);
             read_buf.Consume(bytes_to_decode);
             bytes_to_decode = 0;
-            has_more = false;   // persume done
+            //has_more = false;   // persume done
         } // end if complete
 
         read_buf.Advance(n);
     } // end while
 
-    return ret;
+    return 0;
 } // end Poll_Readable
+
+//===============================================================================|
+/**
+ * @brief makes sure all the contents of the write buffer has been written to the
+ *  sending buffer and kernel is probably sending it.
+ *
+ * @return a true on success
+ */
+bool NeoConnection::Flush()
+{
+    while (!write_buf.Empty())
+    {
+        if (Poll_Writable())
+            return false;   // has to be a syscall error always
+
+        // Optional: safety guard
+        if (write_buf.Size() > 0)
+        {
+            std::this_thread::yield();  // Allow other I/O threads time
+        } // end if
+    } // end while
+
+    write_buf.Reset();
+    return true;
+} // end Flush
+
+//===============================================================================|
+/**
+ * @brief persuming that data has been fully received from Poll_Readable(), the
+ *  function decodes the bolt encoded responses (message).
+ */
+bool NeoConnection::Decode_Response(u8* view, const size_t bytes)
+{
+    if (bytes == 0)
+        return 0;
+
+    //Dump_Hex((const char*)view, bytes);
+    size_t skip = 0;
+    while (skip < bytes)
+    {
+        if (!(0xB0 & *(view + 2)))
+        {
+            err_string = "Invalid Bolt Message Format.";
+            return false;
+        } // end if not valid
+
+        u8 s = static_cast<u8>(state);
+        u8 tag = *(view + 3);
+
+        switch (tag)
+        {
+        case BOLT_SUCCESS:
+            (this->*success_handler[s])(view, bytes);
+            skip = bytes;
+            break;
+
+        case BOLT_FAILURE:
+            (this->*fail_handler[s])(view, bytes);
+            return false;
+            break;
+
+        case BOLT_RECORD:
+            Success_Pull(view, bytes);
+            skip = bytes;
+            break;
+
+        default:
+            Print("What is this?");
+            skip = bytes;
+            read_buf.Reset();
+        } // end switch
+
+        view += skip;
+    } // end while
+
+    return true;
+} // end Decode_Response
 
 //===============================================================================|
 /**
@@ -592,120 +652,59 @@ bool NeoConnection::Recv_Completed(const size_t recvd_bytes)
 
 //===============================================================================|
 /**
- * @brief persuming that data has been fully received from Poll_Readable(), the
- *  function decodes the bolt encoded responses (message).
- */
-int NeoConnection::Decode_Response(u8* view, const size_t bytes)
-{
-    if (bytes == 0)
-        return 0;
-
-    //Dump_Hex((const char*)view, bytes);
-    size_t skip = 0;
-    while (skip < bytes)
-    {
-        if (!(0xB0 & *(view + 2)))
-        {
-            err_string = "Invalid Bolt Message Format.";
-            return -2;
-        } // end if not valid
-
-        u8 s = static_cast<u8>(state);
-        u8 tag = *(view + 3);
-
-        switch (tag)
-        {
-        case BOLT_SUCCESS:
-            skip = (this->*success_handler[s])(view, bytes);
-            break;
-
-        case BOLT_FAILURE:
-            (this->*fail_handler[s])(view, bytes);
-            return -2;
-            break;
-
-        case BOLT_RECORD:
-            skip = Success_Pull(view, bytes);
-            break;
-
-        default:
-            Print("What is this?");
-            skip = bytes;
-            read_buf.Reset();
-        } // end switch
-
-        view += skip;
-    } // end while
-
-    return 0;
-} // end Decode_Response
-
-
-//===============================================================================|
-void NeoConnection::Poll_Writable()
-{
-    while (!write_buf.Empty())
-    {
-        ssize_t n = Send(write_buf.Read_Ptr(), write_buf.Size());
-        if (n <= 0)
-        {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                return;
-
-            Stop();
-            return;
-        } // end if
-
-        write_buf.Consume(n);
-    } // end while
-
-} // end Poll_Writable
-
-
-//===============================================================================|
-void NeoConnection::Flush()
-{
-    while (!write_buf.Empty())
-    {
-        Poll_Writable();
-
-        // Optional: safety guard
-        if (write_buf.Size() > 0)
-        {
-            std::this_thread::yield();  // Allow other I/O threads time
-        } // end if
-    } // end while
-
-    write_buf.Reset();
-} // end Dispatch_Requests
-
-//===============================================================================|
-/**
- * @brief negotiates the supported neo4j version at the start of connection. The
- *  four bytes are neo4j magic numbers 0x6060B017 (in big endian) that is used as
- *  a signature followed by 4 bytes of version client requested version number.
- *  LightningBolt supports all versions upto 5.x (latest as of this writing).
+ * @brief performs version negotiation as specified by the bolt protocol. It uses
+ *  v5.7+ manifest negotiation style to allow the server respond with version 
+ *  numbers supported. If server does not support manifest, it simply starts 
+ *  with version 4 or less.
  *
- * @return the supported version as 32-bit digit on success alas -1 on fail
+ * @return supported version on success or 0 on fail
  */
 int NeoConnection::Negotiate_Version()
 {
-    u32 supported_version;
-    const u8 version[]{
+    u8 version[64]{
         0x60, 0x60, 0xB0, 0x17,         // neo4j magic number
-        0x00, 0x00, 0x03, 0x05,         // request version 5.3+ at first
-        0x00, 0x00, 0x00, 0x04,         // if not try version 4
+        0x00, 0x00, 0x01, 0xFF,         // manifest v1
+        0x00, 0x00, 0x04, 0x04,         // if not try version 4
         0x00, 0x00, 0x00, 0x03,         // version 3 and ...
         0x00, 0x00, 0x00, 0x02          // version 2 (last two are not supported)
     };
 
-    if (Send(version, sizeof(version)) < 0)
+    if (Send(version, 20) < 0)
+    {
+        Close_Driver();
+        return -1;
+    } // end if bad sending
+
+    if ((Recv((char*)version, sizeof(version))) < 0)
+    {
+        Close_Driver();
+        return -1;
+    } // end if bad reception
+
+
+    u32 supported = 0;      // get's the maximum supported
+    const u8 nums = *reinterpret_cast<u8*>(version + 4);  
+        // the byte next to manifest is number of supported versions by server.
+         
+    // pick the higest version
+    u32* iter = reinterpret_cast<u32*>(version + 5);
+    u32* alias = iter;
+    for (int i = 0; i < nums; i++)
+    {
+        u32 v = htonl(*iter);
+        if (supported < v)
+        {
+            supported = v & 0x0F; // only interseted in the last nybble
+            alias = iter;
+        } // end if supported
+        ++iter;
+    } // end for
+    
+    // send to server; and echo back whatever the server caps are
+    if (Send(alias, 5) < 0)
         return -1;
 
-    if (Recv((char*)&supported_version, sizeof(u32)) < 0)
-        return -1;
-
-    return htonl(supported_version) & 0x0F; // only interseted in the last byte
+    return supported;
 } // end Negotiate_Version
 
 //===============================================================================|
@@ -717,7 +716,7 @@ int NeoConnection::Negotiate_Version()
  *  negotiation, thus LightningBolt implements both steps here as states of
  *  the driver.
  *  
- * @return always 0 on success
+ * @return 0 on success
  */
 int NeoConnection::Send_Hellov5()
 {
@@ -773,6 +772,7 @@ int NeoConnection::Send_Hellov5()
     else if (state == BoltState::Logon)
     {
         Set_State(BoltState::Connecting);
+
         hello = (BoltValue(BOLT_LOGON, { {
             mp("scheme", "basic"),
             mp("principal", conn_params["username"]),
@@ -781,19 +781,24 @@ int NeoConnection::Send_Hellov5()
     } // end else
 
     encoder.Encode(hello);
-    Flush();
+    if (!Flush())
+        return -1;
+
     return 0;
 } // end Send_Hellov5
 
 //===============================================================================|
 /**
  * @brief start's a hello signal after a successful version negotiation using v4.xx
- *  of the bolt protocol. The message/payload consists of:
+ *  of the bolt protocol. The message/payload consists of: 
  *      scheme:     a key value that defines the authentication method
  *      user_agent: a key value pair identifer that conforms to Name/Version
  *      principal:  the user name for neo4j database
  *      credentials:the password for neo4j
  *      routing:    an optional routing context defined as a dictionary type
+ * 
+ * Because the driver uses minimal parameter count it could also be used
+ *  for legacy version handshake.
  *
  * @return 0 on success or -2 on fail to define app specific error
  */
@@ -817,70 +822,36 @@ int NeoConnection::Send_Hellov4()
 
 //===============================================================================|
 /**
- * @brief is a minified version of Version 4 hello, and here for my reasons it
- *  will simply call v4 hello for legacy support.
- *.
- * @return 0 on success
+ * @brief encodes a PULL message after a RUN command to fetch all results.
+ *
+ * @param n the number of chunks to to fetch at once, defaulted to -1 to fetch
+ *  everything.
  */
-int NeoConnection::Send_Hello()
+void NeoConnection::Encode_Pull(const int n)
 {
-    Send_Hellov4(); // same as v4 hello for legacy support
-    return 0;
-} // end Send_Hello
+    BoltMessage pull(BoltValue(
+        BOLT_PULL, {
+            {mp("n", n), mp("qid",-1)}
+        }));
+
+    encoder.Encode(pull);
+} // end Send_Pull
 
 //===============================================================================|
 /**
- * @brief handles a bolt hello message which are of two variants based on the 
- *  version number negotiated. v5.x use two steps, one HELLO followed by LOGON
- *  message on successful responses. v4.x and below use HELLO for authentication
- *  skipping the LOGON phase. v1.x-2.x call HELLO - INIT (nonetheless binary
- *  code is identical).
+ * @brief serves as a safety net when things fire outof sync so as not to cause
+ *  segfaults and allow the application to continue safely after having sent a  
+ *  REST signal possibly, in the worst case.
+ * 
+ * @param cursor the current position in the buffer to decode from
+ * @param bytes the number of bytes recieved.
  */
-inline bool NeoConnection::Handle_Hello()
+inline void NeoConnection::Dummy(u8* view, const size_t bytes)
 {
-    BoltMessage rsp;
-    if (Poll_Readable() < 0)
-        return false;
+    Set_State(BoltState::Error);
 
-    // decode and test if the message a is fail?
-    decoder.Decode(view.cursor, rsp);
-    if (rsp.msg.struct_val.tag == BOLT_FAILURE)
-    {
-        err_string = rsp.ToString();
-        return false;
-    } // end if bad newz
-
-    // if the current state if Logon then we must be using v5.x handshake, 
-    //  that requires a LOGON message to be sent, I recursively do so here
-    if (state == BoltState::Logon)
-    {
-        // first time version 5.x handshake
-        read_buf.Reset();       // igonre everything
-        Send_Hellov5();
-
-        // recurse
-        has_more = true;        // ignite loop
-        return Handle_Hello();
-    } // end if v5+ first timer
-
-    Set_State(BoltState::Ready);
-    read_buf.Reset();           // clear buffer
-    return true;
-} // end Handle_Hello
-
-//===============================================================================|
-int NeoConnection::DummyS(u8* view, const size_t bytes)
-{
-    // ignore
-    // BoltMessage unk;
-
-    // if (pipelines.Size() > qid)
-    //     decoder.Decode(active_queries[qid].cursor, unk);
-
-    // sPrint("Error: %s", unk.ToString().c_str());
-    Print("Error: %s", State_ToString().c_str());
-
-    return -1;
+    // save the current error
+    err_string = "State out of sync: " + State_ToString();
 } // end Success_Run
 
 
@@ -894,18 +865,17 @@ int NeoConnection::DummyS(u8* view, const size_t bytes)
  * @param view start of address to decode from
  * @param bytes length of the recvd data
  */
-int NeoConnection::Success_Hello(u8* view, const size_t bytes)
+inline void NeoConnection::Success_Hello(u8* view, const size_t bytes)
 {
     if (state == BoltState::Logon)
     {
         Send_Hellov5();     // log on the server
-        return bytes;
+        return;
     } // end if
     
     has_more = false;
     read_buf.Reset();
     Set_State(BoltState::Ready);
-    return bytes;
 } // end Success_Hello
 
 
@@ -917,15 +887,15 @@ int NeoConnection::Success_Hello(u8* view, const size_t bytes)
  * 
  * @param cursor the starting address for buffer
  * @param bytes the bytes recvd in the buffer
- * 
- * @return number of bytes to skip buffer in case of chunked responses
  */
-int NeoConnection::Success_Run(u8* cursor, const size_t bytes)
+inline void NeoConnection::Success_Run(u8* cursor, const size_t bytes)
 {
     has_more = true; // indicates to decode loop that we have incoming records
     Set_State(BoltState::Pull);
 
-    return decoder.Decode(cursor, view.field_names);
+    // parse and save the field names; until its needed and guranteed to exist
+    //  as long as we are streaming the result
+    decoder.Decode(cursor, view.field_names);
 } // end Success_Run
 
 
@@ -938,22 +908,29 @@ int NeoConnection::Success_Run(u8* cursor, const size_t bytes)
  * 
  * @param cursor the starting address for buffer
  * @param bytes the bytes recvd in the buffer
- * 
- * @return the bytes recvd always to skip the decode loop for Fetch() to handle
  */
-int NeoConnection::Success_Pull(u8* cursor, const size_t bytes)
+inline void NeoConnection::Success_Pull(u8* cursor, const size_t bytes)
 {
+    Set_State(BoltState::Streaming);
+
+    // update the cursor view
     view.cursor = cursor;
     view.size = bytes;
     view.offset = 0;
     has_more = false;       // persume done
-    Set_State(BoltState::Streaming);
-
-    return bytes;
 } // end Success_Record
 
 //===============================================================================|
-int NeoConnection::Success_Record(u8* cursor, const size_t bytes)
+/**
+ * @brief handles the success summary message sent after the completion of each
+ *  record streaming. If the summary message contains "has_more" key and is set 
+ *  to true then it persumes not done and sets the state back to PULL for Fetch()
+ *  once done it sets the state to ready.
+ * 
+ * @param cursor the current position in the buffer to decode from
+ * @param bytes the number of bytes recieved.
+ */
+inline void NeoConnection::Success_Record(u8* cursor, const size_t bytes)
 {
     Dump_Hex((const char*)cursor, bytes);
     Set_State(BoltState::Ready);
@@ -973,8 +950,6 @@ int NeoConnection::Success_Record(u8* cursor, const size_t bytes)
         Set_State(BoltState::Ready);
         read_buf.Reset();
     } // end else
-
-    return skip;
 } // end Success_Record
 
 //===============================================================================|
@@ -1052,3 +1027,26 @@ void NeoConnection::Fail_Record(u8* view, const size_t bytes)
     read_buf.Reset();
 	write_buf.Reset();
 } // end Fail_Record
+
+//===============================================================================|
+/**
+ * @brief encodes the boltvalue reference and flushes it to peer. It then blocks
+ *  and waits for a response from server.
+ * 
+ * @param v the BoltValue to encode and send
+ * 
+ * @return true on success alas false on sys error
+ */
+inline bool NeoConnection::Flush_And_Poll(BoltValue& v)
+{
+    BoltMessage reset(v);
+    encoder.Encode(reset);
+
+    if (!Flush())
+        return false;
+
+    if (Poll_Readable() < 0)
+        return false;
+
+    return true;
+} // end Flush_And_Poll

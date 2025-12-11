@@ -26,7 +26,7 @@ uint64_t benchmark(const std::string& label, Func&& f, size_t iterations) {
 }
 
 int main() {
-    constexpr size_t iterations = 10;
+    constexpr size_t iterations = 1'000'000;
 
 
     // === 1. Streaming 100 Cypher packets ===
@@ -52,7 +52,7 @@ int main() {
     }, iterations);
 
     // === 2. Batched Bolt list of 10,000 items ===
-    const u16 size = 10;
+    const u16 size = 10'000;
     BoltValue bgList = BoltValue::Make_List();
     for (u16 i = 0; i < size; i++)
     {
@@ -84,7 +84,7 @@ int main() {
     BoltValue::Free_Bolt_Value(bgList, true);
 
 
- //   // === 4. Fun: Batch Maps of 1,000 items ===
+    // === 4. Fun: Batch Maps of 1,000 items ===
     const u16 size2 = 1000;
     BoltValue bgMap = BoltValue::Make_Map();
     for (u16 i = 0; i < size2; i++)

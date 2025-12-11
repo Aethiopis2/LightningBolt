@@ -38,10 +38,9 @@ enum class BoltState : u8 {
     Run,            // driver is expecting run success/fail message
     Pull,           // driver is expecting pull success/fail message
     Streaming,      // driver is in a streaming state; i.e. reading buffer
-    Trx,            // manual transaction state
     Error,          // driver has encountered errors?  
 };
-constexpr int DRIVER_STATES = 9;
+constexpr int DRIVER_STATES = 8;
 
 //===============================================================================|
 /**
@@ -90,7 +89,7 @@ struct BoltView
 struct BoltResult
 {
 	BoltValue fields;           // the field names for the record
-    BoltValue records;          // the actual list of records returned
+    BoltValue records = BoltValue::Make_List();          // the actual list of records returned
     BoltValue summary;          // the summary message at end of records
 };
 
@@ -102,6 +101,7 @@ class NeoConnection : public TcpClient
 {
 public: 
 
+    NeoConnection() = default;
     NeoConnection(BoltValue connection_params, const u64 cli_id = 0);
     ~NeoConnection();
     
@@ -112,11 +112,18 @@ public:
     int Run_Query(const char* cypher, BoltValue params=BoltValue::Make_Map(),
         BoltValue extras = BoltValue::Make_Map(), const int chunks = -1);
     int Fetch(BoltMessage& out);
-    int Fetch(BoltResult& res);
 
     int Begin_Transaction(const BoltValue& options = BoltValue::Make_Map());
     int Commit_Transaction(const BoltValue& options = BoltValue::Make_Map());
     int Rollback_Transaction(const BoltValue& options = BoltValue::Make_Map());
+
+    int Pull(const int n);
+    int Reset();
+    int Discard(const int n = -1);
+    int Telemetry(const int api);
+    int Logoff();
+    int Goodbye();
+    int Ack_Failure();
 
     void Set_State(BoltState s);
     BoltState Get_State() const;
@@ -126,13 +133,13 @@ public:
 
 private: 
     
-    u64 client_id;          // connection identifier
-    u64 current_qid;        // incremental identifier for queries
-	int num_queries;        // number of active pipelined queries
-	ssize_t bytes_to_decode{ 0 };   // helper to track bytes to decode
-
-    bool has_more{true};
-    bool is_chunked{false};
+    u64 client_id;              // connection identifier
+    u64 current_qid;            // incremental identifier for queries
+	int num_queries;            // number of active pipelined queries
+    int transaction_count;      // counts the number of active transactions before committing
+    bool has_more;              // sentinel used to control rev loop
+	ssize_t bytes_to_decode;    // helper to track bytes to decode
+    std::string err_string;     // application error info
 
     BoltValue conn_params;  // map of connection parameters
     BoltState state;        // the state of connection
@@ -143,36 +150,29 @@ private:
 
     BoltEncoder encoder;
     BoltDecoder decoder;
-    BoltView view;
-    
-    std::string message_string;             
-    std::string err_string;
-
+    BoltView view;          // slice of the current window into buffer
+            
+    //====================
     // utilities
+    //====================
     void Close_Driver();
-    void Encode_Pull(const int n);
-
     
-
+    bool Poll_Writable();
     int Poll_Readable();
-    void Poll_Writable();
-    void Flush();
-
-    int Decode_Response(u8* view, const size_t bytes);
+    bool Flush();
+    bool Decode_Response(u8* view, const size_t bytes);
     bool Recv_Completed(const size_t bytes);
 
     int Negotiate_Version();
-    int Send_Hellov4();
     int Send_Hellov5();
-    int Send_Hello();
+    int Send_Hellov4();
+    void Encode_Pull(const int n);
 
-    inline bool Handle_Hello();
-
-    int DummyS(u8* view, const size_t bytes);
-    int Success_Hello(u8* view, const size_t bytes);
-    int Success_Run(u8* view, const size_t bytes);
-    int Success_Pull(u8* view, const size_t bytes);
-    int Success_Record(u8* view, const size_t bytes);
+    inline void Dummy(u8* view, const size_t bytes);
+    inline void Success_Hello(u8* view, const size_t bytes);
+    inline void Success_Run(u8* view, const size_t bytes);
+    inline void Success_Pull(u8* view, const size_t bytes);
+    inline void Success_Record(u8* view, const size_t bytes);
 
     void DummyF(u8* view, const size_t bytes);
     void Fail_Hello(u8* view, const size_t bytes);
@@ -180,15 +180,16 @@ private:
     void Fail_Pull(u8* view, const size_t bytes);
     void Fail_Record(u8* view, const size_t bytes);
 
+    inline bool Flush_And_Poll(BoltValue& v);
 
-    using Success_Fn = int (NeoConnection::*)(u8*, const size_t);
+    using Success_Fn = void (NeoConnection::*)(u8*, const size_t);
     using Fail_Fn = void (NeoConnection::*)(u8*, const size_t);
 
     Success_Fn success_handler[DRIVER_STATES]{ 
-        &NeoConnection::DummyS,
+        &NeoConnection::Dummy,
         &NeoConnection::Success_Hello,
         &NeoConnection::Success_Hello,
-        &NeoConnection::DummyS, 
+        &NeoConnection::Dummy, 
         &NeoConnection::Success_Run,
         &NeoConnection::Success_Pull,
 		&NeoConnection::Success_Record,

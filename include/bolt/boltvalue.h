@@ -139,7 +139,7 @@ struct BoltValue
 	BoltType type;                        // type of value stored
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
 	bool disposable = false;              // indicates if the value should be disposed
-	u64 insert_count = 0;                 // count of insertions for tracking
+	s64 insert_count = 0;                 // count of insertions for tracking
     u8 padding[2];
 
     union 
@@ -379,7 +379,7 @@ struct BoltValue
         if (pool && disposable)
         {
 			// snip out the inserted values
-            while (insert_count-- > 0)
+            while (--insert_count > 0)
                 Free_Bolt_Value(*this);
 
             Free_Bolt_Value(*this);
@@ -709,6 +709,7 @@ struct BoltValue
         BoltValue v;
         v.type = BoltType::List;
         v.pool = GetBoltPool<BoltValue>();
+        v.disposable = true;
 
         v.list_val.is_decoded = false;
         v.list_val.size = 0;
@@ -1475,23 +1476,23 @@ struct BoltValue
         } // end else if map
         else if (v.type == BoltType::Struct) v.struct_val.offset++;
 
-		// now shift everything down 1
+		// now shift everything down 1, only if not decoded
         for (int i = static_cast<int>(end); i > static_cast<int>(start); --i)
         {
             BoltValue* bv = pool->Get(static_cast<size_t>(i));
             BoltValue* prev = pool->Get(static_cast<size_t>(i) - 1);
 
 			// shift offsets for lists/maps/structs
-            if (prev->type == BoltType::List)
+            if (prev->type == BoltType::List && !prev->list_val.is_decoded)
             {
                 prev->list_val.offset++;
             } // end if list
-            else if (prev->type == BoltType::Map)
+            else if (prev->type == BoltType::Map && !prev->map_val.is_decoded)
             {
                 prev->map_val.key_offset++;
                 prev->map_val.value_offset++;
             } // end else if map
-            else if (prev->type == BoltType::Struct)
+            else if (prev->type == BoltType::Struct && !prev->struct_val.is_decoded)
             {
                 prev->struct_val.offset++;
             } // end else if struct
@@ -1503,7 +1504,7 @@ struct BoltValue
 		BoltValue* bov = pool->Get(start);
 		*bov = v;
 		bov->disposable = true;
-        bov->insert_count++;
+        insert_count++;
     } // end Insert
 
     // jump table for to_string parsing based on type
