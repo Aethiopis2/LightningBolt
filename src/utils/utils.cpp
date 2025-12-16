@@ -372,7 +372,7 @@ void String_ToLower(char* str, const size_t len)
 {
     // loop and convert each char
     for (size_t i = 0; i < len; i++)
-        str[i] = tolower((unsigned char)str[i]);
+        str[i] = std::tolower((unsigned char)str[i]);
 } // end String_ToLower
 
 //=====================================================================================|

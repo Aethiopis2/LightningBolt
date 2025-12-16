@@ -15,7 +15,7 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
-#include "connection/neoconnection.h"
+#include "neocell.h"
 
 
 
@@ -32,11 +32,11 @@
 int main() 
 {
     Print_Title();
-    const size_t iterations = 1000;
+    const size_t iterations = 10'000;
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoConnection con(BoltValue({
+        NeoCell con(BoltValue({
 			mp("host", "localhost:7687"),
 			mp("username", "neo4j"),
 			mp("password", "tobby@melona"),

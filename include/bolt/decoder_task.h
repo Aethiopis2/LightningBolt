@@ -22,12 +22,12 @@
 //===============================================================================|
 //         CLASS
 //===============================================================================|
-class NeoConnection;
+//class NeoConnection;
 
 
 struct DecoderTask
 {
-    NeoConnection* conn;
+    //NeoConnection* conn;
     u8* view;
     size_t bytes;           // total bytes received
 };

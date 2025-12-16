@@ -122,7 +122,9 @@ struct ScratchBuffer
 /**
  * @brief another high speed memory pool used for storage of BoltValue's ready
  *  for action when duty calls during decoding; our enemies the compunded types, 
- *  Lists, Structs, Maps/Dictionaries and many of thier variants thereof.
+ *  Lists, Structs, Maps/Dictionaries and many of thier variants thereof. However,
+ *  this pool is not guided by static rules and has the ability to grow and shrink
+ *  on demand to accomdiate more.
  */
 template<typename T>
 struct ArenaAllocator
@@ -141,8 +143,7 @@ struct ArenaAllocator
         data = (T*)malloc(sizeof(T) * initial_size);
         if (!data) 
         {
-            std::runtime_error("Failed to allocate memory for ArenaAllocator");
-            return;
+            throw std::runtime_error("Failed to allocate memory for ArenaAllocator");
         } // end if failed
 
         capacity = initial_size;
@@ -266,9 +267,9 @@ struct BoltPool
         size_t count;   // how many items were allocated
     };
 
-    ScratchBuffer<T, SCRATCH_SIZE> scratch;
-    ArenaAllocator<T> arena;
     std::vector<Allocation> allocation_log;
+    ArenaAllocator<T> arena;
+    ScratchBuffer<T, SCRATCH_SIZE> scratch;
 
 
     /**

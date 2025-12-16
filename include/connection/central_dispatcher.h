@@ -50,8 +50,8 @@ public:
     void Sub_Ref();
     u64 Get_Ref() const;
     
-    std::shared_ptr<NeoConnection> Get_Connection();
-    std::shared_ptr<NeoConnection> Get_Connection(const size_t index);
+    /*std::shared_ptr<NeoConnection> Get_Connection();
+    std::shared_ptr<NeoConnection> Get_Connection(const size_t index);*/
     //bool Enqueue(std::unique_ptr<BoltRequest> req, u64 client_id);
 
 private:
@@ -62,7 +62,7 @@ private:
     LockFreeQueue<std::shared_ptr<BoltRequest>> request_queue;
     LockFreeQueue<std::shared_ptr<DecoderTask>> response_queue;
 
-    std::vector<std::shared_ptr<NeoConnection>> connection_pool;
+    //std::vector<std::shared_ptr<NeoConnection>> connection_pool;
     //std::shared_mutex connections_mutex;
     std::atomic<size_t> next_conn{0};
     std::atomic<bool> shutting_down{false};
