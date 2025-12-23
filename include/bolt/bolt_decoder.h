@@ -48,6 +48,10 @@ friend class BoltValue;
 public:
 
     BoltDecoder(BoltBuf &b) : buf(b) {}
+    BoltDecoder(const BoltDecoder&) = default;
+    BoltDecoder(BoltDecoder&&) noexcept = default;
+	BoltDecoder& operator=(const BoltDecoder&) = default;
+	BoltDecoder& operator=(BoltDecoder&&) noexcept = default;
 
     void Decode(BoltValue &out)
     {
@@ -72,10 +76,11 @@ public:
 
     int Decode(u8* view_start, BoltValue& v)
     {
-        u16 chunk = htons(((u16*)view_start)[0]);
-        u8* pos = view_start + 2;
+        u16 chunk = *((u16*)view_start);
+        u16 chunk_size = htons(chunk);
 
-        while (chunk > (pos - view_start))
+        u8* pos = view_start + 2;
+        while (chunk_size > (pos - view_start))
         {
             u8 tag = *pos;
             if (!jump_table[tag](pos, v))
@@ -85,7 +90,11 @@ public:
             } // end if
         } // end while
 
-        return 0;
+        u32 consumed = chunk_size + 2;
+        if (*(u16*)(pos) == 0x00)
+            consumed += 2;
+
+        return consumed;
     } // end Decode
     
     /**

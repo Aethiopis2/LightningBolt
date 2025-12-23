@@ -42,7 +42,6 @@ int main() {
         }));
     }
 
-    
     benchmark("Streaming 100 Cypher packets encoding", [&] {
         for (const auto& op : streamOps) {
             BoltBuf buf(512);
@@ -56,11 +55,11 @@ int main() {
     BoltValue bgList = BoltValue::Make_List();
     for (u16 i = 0; i < size; i++)
     {
-        bgList.Insert_List(BoltValue({
+        bgList.Insert_List({
             mp("id", i + 1),
             mp("score", (i + 1) * 0.1),
-            mp("tags", BoltValue({i,i + 1,i + 2}, false))
-            }, false));
+            mp("tags", BoltValue({i, i + 1, i + 2}))
+            });
     } // end for
 
     // Pre-allocate reusable buffer for batch encoding
@@ -81,17 +80,15 @@ int main() {
         batchBuf.Reset_Read();
     }, iterations);
 
-    BoltValue::Free_Bolt_Value(bgList, true);
-
 
     // === 4. Fun: Batch Maps of 1,000 items ===
-    const u16 size2 = 1000;
+    const u16 size2 = 1'000;
     BoltValue bgMap = BoltValue::Make_Map();
     for (u16 i = 0; i < size2; i++)
     {
         bgMap.Insert_Map("TheKey", BoltValue({
-            mp("id", BoltValue({i + 1, i + 2, i + 3}, false))
-            }, false));
+            mp("id", BoltValue({i + 1, i + 2, i + 3}))
+            }));
     } // end for
 
 	// clear previous buffer

@@ -324,14 +324,8 @@ struct BoltPool
      * 
      * @param clear_all special command to explicitly free the buffer
      */
-    void Release(const bool clear_all) 
+    void Release() 
     {
-        if (clear_all)
-        {
-            allocation_log.clear();
-            Reset_All();
-        } // end if
-
         if (allocation_log.empty()) return;
 
         Allocation last = allocation_log.back();
@@ -395,7 +389,6 @@ struct BoltPool
 };
 
 
-//===============================================================================|
 /**
  * @brief Get's a thread-local BoltPool instance for the specified type.
  * 
@@ -408,3 +401,19 @@ inline BoltPool<T>* GetBoltPool()
     thread_local BoltPool<T> pool_instance;
     return &pool_instance;
 } // end BoltPool 
+
+
+/**
+ * @brief releases all allocations in the BoltPool up to the specified offset.
+ * 
+ * @tparam T the type of data to store in the pool
+ */
+template<typename T>
+inline void Release_Pool(const size_t offset) 
+{
+    BoltPool<T>* pool = GetBoltPool<T>();
+    while (pool->Get_Last_Offset() > offset) 
+    {
+        pool->Release();
+	} // end while
+} // end ResetBoltPool

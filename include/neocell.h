@@ -6,7 +6,6 @@
  * @date updated 12th of Decemeber 2025, Friday
  *
  * @copyright Copyright (c) 2025
- *
  */
 #pragma once
 
@@ -15,7 +14,6 @@
  //          INCLUDES
  //===============================================================================|
 #include "connection/neoconnection.h"
-#include "utils/lock_free_queue.h"
 
 
 
@@ -37,35 +35,28 @@ public:
     ~NeoCell();
 
     int Start();
-    /*int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
+    int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
         BoltValue extras = BoltValue::Make_Map(), const int chunks = -1);
     int Fetch(BoltMessage& out);
-
-    int Begin_Transaction(const BoltValue& options = BoltValue::Make_Map());
-    int Commit_Transaction(const BoltValue& options = BoltValue::Make_Map());
-    int Rollback_Transaction(const BoltValue& options = BoltValue::Make_Map());
-
+    int Begin(const BoltValue& options = BoltValue::Make_Map());
+    int Commit(const BoltValue& options = BoltValue::Make_Map());
+    int Rollback(const BoltValue& options = BoltValue::Make_Map());
     int Pull(const int n);
-    int Reset();
     int Discard(const int n);
-    int Telemetry(const int api);*/
+    int Telemetry(const int api);
+    int Reset();
     int Logoff();
     int Goodbye();
-    //int Ack_Failure();
+    int Ack_Failure();
 
     std::string Get_Last_Error() const;
-    std::string State_ToString() const;
-
     void Stop();
-
 
 private:
 
     float sup_version;      // the supported bolt version set from server
     bool standalone_mode;   // one of the two modes; false = routed clusters, true = standalone
-    bool has_more;          // sentinel used to control rev loop
 
-    int cluster_count;      // count of clusters (0 based)
     int num_queries;        // number of active pipelined queries
     int transaction_count;  // counts the number of active transactions before committing
 
@@ -75,8 +66,7 @@ private:
     
 
     // connections
-    NeoConnection writer;           // leader role in clustered mode or core connection standalone
-    LockFreeQueue<NeoConnection> readers;   // bunch of connections for followers + replica roles
+	NeoConnection connection;        // a connection instance; either standalone or routed
 
     struct RouteTable
     {

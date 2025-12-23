@@ -147,7 +147,10 @@ int NeoConnection::Poll_Readable()
         if (Recv_Completed())
         {
             if (!Decode_Response(read_buf.Read_Ptr(), bytes_recvd))
-                return -2;
+            {
+				bytes_recvd = 0;
+				return -2;
+			} // end if
 
             read_buf.Consume(bytes_recvd);
             bytes_recvd = 0;
@@ -208,13 +211,13 @@ bool NeoConnection::Flush()
  *
  * @return true on success alas false on sys error
  */
-inline bool NeoConnection::Flush_And_Poll(BoltValue& v)
+bool NeoConnection::Flush_And_Poll(BoltValue& v)
 {
     encoder.Encode(v);
     if (!Flush())
         return false;
 
-    if (!Decode_Response(read_buf.Read_Ptr(), bytes_recvd))
+	if (Poll_Readable() < 0)
         return false;
 
     return true;
@@ -260,7 +263,7 @@ void NeoConnection::Set_ClientID(const int cli_id)
 void NeoConnection::Set_State(const ConnectionState s)
 {
     state.store(s, std::memory_order_release);
-    //state.notify_one();
+    state.notify_one();
 } // end Set_State
 
 
@@ -308,16 +311,21 @@ bool NeoConnection::Poll_Writable()
     while (!write_buf.Empty())
     {
         ssize_t n = Send(write_buf.Read_Ptr(), write_buf.Size());
-        if (n <= 0)
+        if (n < 0)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
                 continue;
-            else if (n == 0)
-                err_string = "peer has closed the connection";
 
             Terminate();
             return false;
         } // end if
+        else if (n == 0)
+        {
+            err_string = "peer has closed the connection";
+
+            Terminate();
+            return false;
+        } // end else if
 
         write_buf.Consume(n);
     } // end while
@@ -366,7 +374,7 @@ bool NeoConnection::Decode_Response(u8* view, const size_t bytes)
     if (bytes == 0)
         return 0;
 
-    Dump_Hex((const char*)view, bytes);
+    //Dump_Hex((const char*)view, bytes);
     size_t decoded = 0;
     while (decoded < bytes)
     {
@@ -396,6 +404,10 @@ bool NeoConnection::Decode_Response(u8* view, const size_t bytes)
             skip = bytes;
             break;
 
+        case BOLT_IGNORED:
+            skip = Handle_Ignored(view, bytes);
+			break;
+
         default:
             Print("What is this?");
             skip = bytes;
@@ -408,6 +420,35 @@ bool NeoConnection::Decode_Response(u8* view, const size_t bytes)
 
     return true;
 } // end Decode_Response
+
+
+/**
+ * @brief determines if the record streaming is done based on the presence of
+ *  "has_more" key in the summary message map.
+ *
+ * @param cursor pointer to the current position in the buffer
+ * @param v reference to boltvalue to decode into
+ *
+ * @return true if record streaming is done else false
+ */
+bool NeoConnection::Is_Record_Done(BoltMessage& m)
+{
+    if (m.msg(0).type == BoltType::Map &&
+        m.msg(0)["has_more"].type != BoltType::Unk &&
+        m.msg(0)["has_more"].bool_val == true)
+    {
+        // yet streaming, notify fetch to continue
+        Set_State(ConnectionState::Pull);
+    } // end if
+    else
+    {
+        has_more = false;
+        Set_State(ConnectionState::Ready);
+        return true;
+    } // end else
+
+    return false;
+} // end Is_Record_Done
 
 
 /**
@@ -553,7 +594,7 @@ int NeoConnection::Send_Hellov5()
                     mp("product", "LightningBolt/v1.0.0"),
                     mp("platform", "Linux 6.6.87.2/microsoft-standard-WSL2; x64"),
                     mp("language", "C++/17"),
-                }, false));
+                }));
         } // end sversion
 
         hello.msg.Insert_Struct(bmp);
@@ -617,12 +658,12 @@ int NeoConnection::Send_Hellov4()
  *  segfaults and allow the application to continue safely after having sent a
  *  REST signal possibly, in the worst case.
  *
- * @param cursor the current position in the buffer to decode from
- * @param bytes the number of bytes recieved.
+ * @param view the current position in the buffer to decode from
+ * @param size the number of bytes recieved.
  *
  * @return -2 to indicate error and requires RESET or Reconnect
  */
-inline int NeoConnection::Dummy(u8* view, const size_t bytes)
+inline int NeoConnection::Dummy(u8* view, const size_t size)
 {
     Set_State(ConnectionState::Error);
     err_string = "State out of sync: " + State_ToString();
@@ -638,24 +679,24 @@ inline int NeoConnection::Dummy(u8* view, const size_t bytes)
  *  sets the driver state to ready.
  *
  * @param view start of address to decode from
- * @param bytes length of the recvd data
+ * @param size length of the recvd data
  *
- * @return bytes recevd
+ * @return bytes decoded
  */
-inline int NeoConnection::Success_Hello(u8* view, const size_t bytes)
+inline int NeoConnection::Success_Hello(u8* view, const size_t size)
 {
     ConnectionState s = Get_State();
     if (s == ConnectionState::Logon)
     {
         Send_Hellov5();     // log on the server
-        return bytes;
+        return size;
     } // end if
 
     has_more = false;
     read_buf.Reset();
     Set_State(ConnectionState::Ready);
 
-    return bytes;
+    return size;
 } // end Success_Hello
 
 
@@ -665,9 +706,9 @@ inline int NeoConnection::Success_Hello(u8* view, const size_t bytes)
  *  Sets the state to pull to inidcate we expect records next.
  *
  * @param cursor the starting address for buffer
- * @param bytes the bytes recvd in the buffer
+ * @param size the bytes recvd in the buffer
  */
-inline int NeoConnection::Success_Run(u8* cursor, const size_t bytes)
+inline int NeoConnection::Success_Run(u8* cursor, const size_t size)
 {
     has_more = true; // indicates to decode loop that we have incoming records
     Set_State(ConnectionState::Pull);
@@ -686,19 +727,19 @@ inline int NeoConnection::Success_Run(u8* cursor, const size_t bytes)
  *  the state to streaming to indicate driver is now consuming buffer.
  *
  * @param cursor the starting address for buffer
- * @param bytes the bytes recvd in the buffer
+ * @param size the bytes recvd in the buffer
  */
-inline int NeoConnection::Success_Pull(u8* cursor, const size_t bytes)
+inline int NeoConnection::Success_Pull(u8* cursor, const size_t size)
 {
     Set_State(ConnectionState::Streaming);
 
     // update the cursor view
     view.cursor = cursor;
-    view.size = bytes;
+    view.size = size;
     view.offset = 0;
     has_more = false;       // persume done
 
-    return bytes;
+    return size;
 } // end Success_Record
 
 
@@ -708,32 +749,33 @@ inline int NeoConnection::Success_Pull(u8* cursor, const size_t bytes)
  *  to true then it persumes not done and sets the state back to PULL for Fetch()
  *  once done it sets the state to ready.
  *
- * @param cursor the current position in the buffer to decode from
- * @param bytes the number of bytes recieved.
+ * @param view the current position in the buffer to decode from
+ * @param size the number of bytes recieved.
  */
-inline int NeoConnection::Success_Record(u8* cursor, const size_t bytes)
+inline int NeoConnection::Success_Record(u8* cursor, const size_t size)
 {
-    Dump_Hex((const char*)cursor, bytes);
-    Set_State(ConnectionState::Ready);
     int skip = decoder.Decode(cursor, view.summary_meta);
+	Is_Record_Done(view.summary_meta);
 
-    if (view.summary_meta.msg[0].type == BoltType::Map &&
-        view.summary_meta.msg[0]["has_more"].type != BoltType::Unk &&
-        view.summary_meta.msg[0]["has_more"].bool_val == true)
-    {
-        // all done
-        has_more = true;
-        Set_State(ConnectionState::Pull);
-    } // end if
-    else
-    {
-        has_more = false;
-        Set_State(ConnectionState::Ready);
-        read_buf.Reset();
-    } // end else
-
-    return bytes;
+    return skip;
 } // end Success_Record
+
+
+/**
+ * @brief handles the success reset message sent after a RESET command is sent
+ * 
+ * @param view the current position in the buffer to decode from
+ * @param size the number of bytes recieved.
+ * 
+ * @return size of bytes processed
+ */
+inline int NeoConnection::Success_Reset(u8* view, const size_t size)
+{
+    has_more = false;
+    read_buf.Reset();
+    Set_State(ConnectionState::Ready);
+    return size;
+} // end Success_Reset
 
 
 /**
@@ -741,18 +783,16 @@ inline int NeoConnection::Success_Record(u8* cursor, const size_t bytes)
  *  which connection is presumed closed and must be restarted again.
  *
  * @param view the start of buffer message to decode (contains error string)
- * @param bytes length of the buffer above.
+ * @param size length of the buffer above.
  */
-inline int NeoConnection::Fail_Hello(u8* view, const size_t bytes)
+inline int NeoConnection::Fail_Hello(u8* view, const size_t size)
 {
-    BoltMessage fail;
-    int skip = decoder.Decode(view, fail);
-    err_string = fail.ToString();
-
+    Decode_Error(view, size);
     Set_State(ConnectionState::Disconnected);
     has_more = false;
+    Terminate();
 
-    return skip;
+    return size;
 } // end Fail_Hello
 
 
@@ -760,11 +800,17 @@ inline int NeoConnection::Fail_Hello(u8* view, const size_t bytes)
  * @brief
  *
  * @param view the start of buffer message to decode
- * @param bytes length of the buffer above.
+ * @param size length of the buffer.
  */
-inline int NeoConnection::Fail_Run(u8* view, const size_t bytes)
+inline int NeoConnection::Fail_Run(u8* view, const size_t size)
 {
-    Fail_Hello(view, bytes);
+	Decode_Error(view, size);
+	Set_State(ConnectionState::Error);
+	has_more = false;
+    //bytes_recvd = 0;    // clear it
+	read_buf.Reset();
+
+    return size;
 } // end Fail_Run
 
 
@@ -772,9 +818,9 @@ inline int NeoConnection::Fail_Run(u8* view, const size_t bytes)
  * @brief
  *
  * @param view the start of buffer message to decode
- * @param bytes length of the buffer above.
+ * @param size length of the buffer above.
  */
-inline int NeoConnection::Fail_Pull(u8* view, const size_t bytes)
+inline int NeoConnection::Fail_Pull(u8* view, const size_t size)
 {
 
 } // end Fail_Pull
@@ -784,9 +830,9 @@ inline int NeoConnection::Fail_Pull(u8* view, const size_t bytes)
  * @brief
  *
  * @param view the start of buffer message to decode
- * @param bytes length of the buffer above.
+ * @param size length of the buffer above.
  */
-int inline NeoConnection::Fail_Record(u8* view, const size_t bytes)
+int inline NeoConnection::Fail_Record(u8* view, const size_t size)
 {
     BoltMessage fail;
 
@@ -798,3 +844,51 @@ int inline NeoConnection::Fail_Record(u8* view, const size_t bytes)
     read_buf.Reset();
     write_buf.Reset();
 } // end Fail_Record
+
+
+/**
+ * @brief handles failure during RESET command; it decodes the error message,
+ *
+ * @param view the start of buffer message to decode
+ * @param size length of the buffer above.
+ */
+int inline NeoConnection::Fail_Reset(u8* view, const size_t size)
+{
+    Decode_Error(view, size);
+    Set_State(ConnectionState::Disconnected);
+    has_more = false;
+    Terminate();
+    return size;
+} // end Fail_Reset
+
+
+/**
+ * @brief handles the IGNORED message from server; it simply terminates the
+ *  connection as it indicates a serious state out of sync.
+ * 
+ * @param view the current position in the buffer to decode from
+ * @param size the number of bytes recieved.
+ * 
+ * @return size of bytes processed
+ */
+inline int NeoConnection::Handle_Ignored(u8* view, const size_t size)
+{
+    // simply ignore and move on
+    Terminate();
+    return size;
+} // end Handle_Ignored
+
+
+/**
+ * @brief decodes the stream containing the error, sets the connection
+ *  error string.
+ * 
+ * @param view into the buffer
+ * @param size of the view
+ */
+inline void NeoConnection::Decode_Error(u8* view, const size_t size)
+{
+    BoltMessage fail;
+    int skip = decoder.Decode(view, fail);
+    err_string = fail.ToString();
+} // end Decode_Error

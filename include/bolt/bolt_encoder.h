@@ -45,83 +45,88 @@ public:
     explicit BoltEncoder(BoltBuf &b) 
         : buf(b) {}
 
-        /**
-         * @brief encode's objects according to bolt protocol PackStream
-         *  format.
-         * 
-         * @param val the value/object to encode
-         * @param len optional: if sizeof value can't be inferred.
-         */
-        template <typename T>
-        inline void Encode(const T& val, const size_t len = 0) 
+    BoltEncoder(const BoltEncoder&) = default;
+	BoltEncoder& operator=(const BoltEncoder&) = default;
+    BoltEncoder(BoltEncoder&&) noexcept = default;
+	BoltEncoder& operator=(BoltEncoder&&) noexcept = default;
+
+    /**
+     * @brief encode's objects according to bolt protocol PackStream
+     *  format.
+     * 
+     * @param val the value/object to encode
+     * @param len optional: if sizeof value can't be inferred.
+     */
+    template <typename T>
+    inline void Encode(const T& val, const size_t len = 0) 
+    {
+        if constexpr (std::is_same_v<T, std::nullptr_t>) 
         {
-            if constexpr (std::is_same_v<T, std::nullptr_t>) 
+            Encode_Null();
+        } // end if null
+        else if constexpr (std::is_same_v<T, bool>) 
+        {
+            Encode_Bool(val);
+        } // end else bool
+        else if constexpr (std::is_same_v<T, std::string>) 
+        {
+            Encode_String(val);
+        } // end else string
+        else if constexpr (std::is_same_v<T, const char*>) 
+        {
+            Encode_String(val, len);
+        } // end else string
+        else if constexpr (std::is_same_v<T, std::vector<u8>>) 
+        {
+            Encode_Bytes(val);
+        } // end else vector
+        else if constexpr (std::is_same_v<T, BoltMessage>)
+        {
+            //std::cout << "Encode message" << std::endl;
+            Encode_Message(val);
+        } // end else encode message
+        else if constexpr (std::is_same_v<T, BoltValue>)
+        {
+            // check the type
+            switch (val.type)
             {
-                Encode_Null();
-            } // end if null
-            else if constexpr (std::is_same_v<T, bool>) 
-            {
-                Encode_Bool(val);
-            } // end else bool
-            else if constexpr (std::is_same_v<T, std::string>) 
-            {
-                Encode_String(val);
-            } // end else string
-            else if constexpr (std::is_same_v<T, const char*>) 
-            {
-                Encode_String(val, len);
-            } // end else string
-            else if constexpr (std::is_same_v<T, std::vector<u8>>) 
-            {
-                Encode_Bytes(val);
-            } // end else vector
-            else if constexpr (std::is_same_v<T, BoltMessage>)
-            {
-                //std::cout << "Encode message" << std::endl;
-                Encode_Message(val);
-            } // end else encode message
-            else if constexpr (std::is_same_v<T, BoltValue>)
-            {
-                // check the type
-                switch (val.type)
-                {
-                    /** basic primitives */
-                    case BoltType::Null:
-                        Encode_Null();
-                        break;
+                /** basic primitives */
+                case BoltType::Null:
+                    Encode_Null();
+                    break;
 
-                    case BoltType::Bool:
-                        Encode_Bool(val.bool_val);
-                        break;
+                case BoltType::Bool:
+                    Encode_Bool(val.bool_val);
+                    break;
 
-                    case BoltType::Int:
-                        Encode_Int(val.int_val);
-                        break;
+                case BoltType::Int:
+                    Encode_Int(val.int_val);
+                    break;
                     
-                    case BoltType::Float:
-                        Encode_Float(val.float_val);
-                        break;
+                case BoltType::Float:
+                    Encode_Float(val.float_val);
+                    break;
 
-                    case BoltType::String:
-                        Encode_String(val.str_val.str, val.str_val.length);
-                        break;
+                case BoltType::String:
+                    Encode_String(val.str_val.str, val.str_val.length);
+                    break;
 
-                    case BoltType::Bytes:
-                        Encode_Bytes(val);
-                        break;
+                case BoltType::Bytes:
+                    Encode_Bytes(val);
+                    break;
 
-                    /** compound primitives */
-                    case BoltType::List:
-                        Encode_List(val);
-                        break;
+                /** compound primitives */
+                case BoltType::List:
+                    Encode_List(val);
+                    break;
 
-                    case BoltType::Map:
-                        Encode_Map(val);
-                        break;
+                case BoltType::Map:
+                    Encode_Map(val);
+                    break;
 
-                    case BoltType::Struct:
-                        Encode_Struct(val);
-                        break;
+                case BoltType::Struct:
+                    Encode_Struct(val);
+                    break;
                 } // end switch
             } // end else if
             else if (std::is_integral_v<T>) 

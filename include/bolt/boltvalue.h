@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @brief defintion of BoltValue that is an abstraction of neo4j types defined in
  *  boltprotocol using PackStream format. The goal here is to come up with a structure
  *  that abstracts neo4j types without sacrificing speed and making excessive copy.
@@ -138,8 +138,6 @@ struct BoltValue
 {
 	BoltType type;                        // type of value stored
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
-	bool disposable = false;              // indicates if the value should be disposed
-	s64 insert_count = 0;                 // count of insertions for tracking
     u8 padding[2];
 
     union 
@@ -194,14 +192,14 @@ struct BoltValue
     };
 
     
-    //===============================================================================|
+    
     /* Constructors */
     /**
      * @brief
      */
     BoltValue() = default;
 
-    //===============================================================================|
+    
     /** 
 	 * @brief a constructor for boolean values.
      */
@@ -211,7 +209,7 @@ struct BoltValue
         bool_val = b;
     } // end bool cntr
 
-    //===============================================================================|
+    
     /** 
 	 * @brief a constructor for integer values.
      */
@@ -221,7 +219,7 @@ struct BoltValue
         int_val = i;
     } // end int cntr
 
-    //===============================================================================|
+    
     /** 
 	 * @brief a constructor for integer values.
      */
@@ -231,7 +229,7 @@ struct BoltValue
         int_val = i;
     } // end int cntr
 
-    //===============================================================================|
+    
     /** 
 	 * @brief a constructor for double values.
      */
@@ -241,7 +239,7 @@ struct BoltValue
         float_val = d;
     } // end double cntr
 
-    //===============================================================================|
+    
     /** 
 	 * @brief a constructor for C style (me prefers this) string values.
      */
@@ -252,7 +250,7 @@ struct BoltValue
         str_val.length = strlen(str);
     } // end char* cntr
 
-    //===============================================================================|
+    
     /**
 	 * @brief a constructor for string values.
      */
@@ -263,12 +261,12 @@ struct BoltValue
         str_val.length = str.size();
     } // end string cntr
 
-    //===============================================================================|
+    
     /**
 	 * @brief a constructor for neo4j map types
      */
-    BoltValue(std::pair<const char*, BoltValue> v, const bool disp = true)
-		: type(BoltType::Map), disposable(disp)
+    BoltValue(std::pair<const char*, BoltValue> v)
+		: type(BoltType::Map)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -284,16 +282,15 @@ struct BoltValue
         value[0] = v.second;
     } // end pair cntr
 
-    //===============================================================================|
+    
     /**
      * @brief initializer constructor for neo4j List types 
      *  with heterogeneous data.
      * 
 	 * @param init the initializer list
-	 * @param disp indicates if disposable
      */
-    BoltValue(std::initializer_list<BoltValue> init, const bool disp = true)
-		: type(BoltType::List), disposable(disp)
+    BoltValue(std::initializer_list<BoltValue> init)
+		: type(BoltType::List)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -310,17 +307,15 @@ struct BoltValue
         } // end for
     } // end constructor
 
-    //===============================================================================|
+    
     /**
      * @brief initializer for noe4j dictionary types
      *  or what I like to call maps.
      * 
 	 * @param init the initializer list of key value pairs
-	 * @param disp indicates if disposable
      */
-    BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init, 
-        const bool disp = true)
-		: type(BoltType::Map), disposable(disp)
+    BoltValue(std::initializer_list<std::pair<const char*, BoltValue>> init)
+		: type(BoltType::Map)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -341,7 +336,7 @@ struct BoltValue
         } // end for 
     } // end initalizer
 
-    //===============================================================================|
+    
     /**
      * @brief initializer for neo4j struct types. All other compund types such as nodes 
      *  and relataionships build on this struct. 
@@ -349,10 +344,9 @@ struct BoltValue
      * @param tag identifier/signature of the structure according
      *  neo4j bolt specs.
 	 * @param init the initializer list of bolt values
-	 * @param disp indicates if disposable
      */
-    BoltValue(u8 tag, std::initializer_list<BoltValue> init, const bool disp = true)
-        :type(BoltType::Struct), disposable(disp)
+    BoltValue(u8 tag, std::initializer_list<BoltValue> init)
+        :type(BoltType::Struct)
     {
         if (!pool)
             pool = GetBoltPool<BoltValue>();
@@ -370,23 +364,13 @@ struct BoltValue
         } // end k
     } // end BoltValue
 
-    //===============================================================================|
+
     /**
      * @brief destructor
      */
-    ~BoltValue()
-    {
-        if (pool && disposable)
-        {
-			// snip out the inserted values
-            while (--insert_count > 0)
-                Free_Bolt_Value(*this);
+    ~BoltValue() { } // end destructor
 
-            Free_Bolt_Value(*this);
-		} // end if pool
-    } // end destructor
-
-    //===============================================================================|
+    
     /**
      * @brief overloaded brace - () operator for list and struct types
      * 
@@ -549,8 +533,7 @@ struct BoltValue
         if (type != BoltType::List)
             return;
 
-        BoltValue val = v;  // prevents opt outs
-        Insert(val, list_val.offset);
+        Insert_Front(v, list_val.offset);
         list_val.size++;
     } // end Add_List
 
@@ -567,11 +550,8 @@ struct BoltValue
         if (type != BoltType::Map)
             return;
 
-        BoltValue k = key;      // prevents opt outs
-        BoltValue val = value;  // prevents opt outs
-
-        Insert(val, map_val.key_offset + map_val.size);
-        Insert(k, map_val.key_offset);
+        Insert_Front(value, map_val.value_offset);
+        Insert_Front(key, map_val.key_offset);
         map_val.value_offset++;
         map_val.size++;
     } // end Insert_Map 
@@ -588,8 +568,7 @@ struct BoltValue
         if (type != BoltType::Struct)
             return;
 
-        BoltValue val = v;  // prevents opt outs
-        Insert(val, struct_val.offset);
+        Insert_Front(v, struct_val.offset);
         struct_val.size++;
     } // end Add_Struct
 
@@ -709,7 +688,6 @@ struct BoltValue
         BoltValue v;
         v.type = BoltType::List;
         v.pool = GetBoltPool<BoltValue>();
-        v.disposable = true;
 
         v.list_val.is_decoded = false;
         v.list_val.size = 0;
@@ -807,16 +785,16 @@ struct BoltValue
      * @param val The BoltValue to free.
      * @param clear_all explict free useful during insertions
      */
-    static void Free_Bolt_Value(BoltValue& val, const bool clear_all = false)
+    static void Free_Bolt_Value(BoltValue& val)
     {
         if (val.type == BoltType::List && !val.list_val.is_decoded)
-            val.pool->Release(clear_all);
+            val.pool->Release();
 
         else if (val.type == BoltType::Map && !val.map_val.is_decoded)
-            val.pool->Release(clear_all);
+            val.pool->Release();
 
         else if (val.type == BoltType::Struct && !val.struct_val.is_decoded)
-            val.pool->Release(clear_all);
+            val.pool->Release();
     } // end FreeBoltValue
 
     //===============================================================================|
@@ -1464,7 +1442,7 @@ struct BoltValue
      * @param v the bolt value to insert
      * @param start the starting point in the pool, i.e. the first stored item
      */
-    void Insert(BoltValue& v, const size_t start)
+    void Insert_Front(BoltValue& v, const size_t start)
     {
         size_t end = pool->Alloc(1);
 
@@ -1497,14 +1475,11 @@ struct BoltValue
                 prev->struct_val.offset++;
             } // end else if struct
 
-            prev->disposable = true;
 			*bv = *prev;
 		} // end for shift
 
 		BoltValue* bov = pool->Get(start);
 		*bov = v;
-		bov->disposable = true;
-        insert_count++;
     } // end Insert
 
     // jump table for to_string parsing based on type

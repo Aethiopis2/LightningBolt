@@ -16,69 +16,77 @@
 //          INCLUDES
 //===============================================================================|
 #include <chrono>
-#include "connection/central_dispatcher.h"
-#include "bolt/bolt_response.h"
-#include <numeric>
+#include "neopool.h"
 using namespace std;
 
 
 
-CentralDispatcher g_dispatcher;
-std::vector<int64_t> durs;
+static std::atomic<int> completed{ 0 };
+static std::atomic<int> records{ 0 };
 
 //===============================================================================|
 //          FUNCTIONS
 //===============================================================================|
-void Run_Test_Query(u64 client_id) {
-    auto start = std::chrono::high_resolution_clock::now();
+void QueryCallback(int rc, void*) 
+{
+    if (rc == 0)
+        completed.fetch_add(1, std::memory_order_relaxed);
+} // end QueryCallback
 
-    BoltRequest req(
-        "MATCH (n) RETURN n LIMIT 10",
-        BoltRequest::QueryType::READ,
-        BoltValue::Make_Map(),
-        BoltValue::Make_Map(),
-        [client_id, start](NeoConnection* pconn) {
-            // std::cout << "Client " << client_id << " got response:\n";
-            BoltMessage out;
-            while (pconn->Fetch(out) > 0)
-                Print("%s", out.ToString().c_str());
-            
-            auto end = std::chrono::high_resolution_clock::now();
-            durs.push_back(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
-            return 0;
-        },
-        client_id
-    );
-    g_dispatcher.Submit_Request(std::move(std::make_shared<BoltRequest>(req)));
-}
+void FetchCallbackFn(BoltMessage* msg, int status, void*) 
+{
+    if (msg)
+    {
+        //std::cout << msg->ToString() << "\n";
+        records.fetch_add(1, std::memory_order_relaxed);
+    }
+} // end FetchCallbackFn
 
 
 int main() 
 {
-    Print_Title();
-    
-    const int pool_size = 1;
-    const u64 num_query = 1000;
+    constexpr int QUERY_COUNT = 1000;
+    NeoCellPool pool(4, BoltValue({
+            mp("host", "localhost:7687"),
+            mp("username", "neo4j"),
+            mp("password", "tobby@melona"),
+            mp("encrypted", "false")
+        }));
+    pool.Start();
 
-    for (size_t i=0; i < 1; i++)
-    {
-        g_dispatcher.Init("bolt://localhost:7687", pool_size);
-        
-        for (u64 j = 0; j < num_query; j++)
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < QUERY_COUNT; ++i) {
+        NeoCellWorker* cell = pool.Acquire();
+
         {
-            Run_Test_Query(j);
+            CellCommand cmd;
+            cmd.type = CellCmdType::Run;
+            cmd.cypher = "UNWIND range(1,100) AS n RETURN n";
+            cmd.params = BoltValue::Make_Map();
+            cmd.extras = BoltValue::Make_Map();
+            cmd.cb = QueryCallback;
+            cell->Enqueue(std::move(cmd));
         }
 
-        g_dispatcher.Shutdown();
+        {
+            CellCommand cmd;
+            cmd.type = CellCmdType::Fetch;
+            cmd.fetch_cb = FetchCallbackFn;
+            cell->Enqueue(std::move(cmd));
+        }
     }
-    if (!durs.empty()) 
-    {
-        int64_t total = std::accumulate(durs.begin(), durs.end(), int64_t{0});
-        int64_t avg = total / static_cast<int64_t>(durs.size());
-        Print("Average duration: %lld ms", avg);
-    } else 
-    {
-        Print("No durations recorded.");
-    }
-    Print("Terminated");
+
+    while (completed.load() < QUERY_COUNT)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    auto end = std::chrono::high_resolution_clock::now();
+    pool.Stop();
+
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    std::cout << "Queries: " << QUERY_COUNT << "\n";
+    std::cout << "Records: " << records.load() << "\n";
+    std::cout << "Time(ms): " << ms << "\n";
+    std::cout << "QPS: " << (QUERY_COUNT * 1000.0 / ms) << "\n";
 }

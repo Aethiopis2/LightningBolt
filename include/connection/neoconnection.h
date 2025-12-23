@@ -89,6 +89,10 @@ class NeoConnection : public TcpClient
 public: 
 
     NeoConnection();
+	NeoConnection(const NeoConnection&) = default;
+	NeoConnection& operator=(const NeoConnection&) = default;
+	NeoConnection(NeoConnection&&) noexcept = default;
+	NeoConnection& operator=(NeoConnection&&) noexcept = default;
     ~NeoConnection();
     
     int Init(BoltValue* params, const int cli_id = -1);
@@ -135,22 +139,29 @@ private:
     bool Poll_Writable();
     bool Recv_Completed();
     bool Decode_Response(u8* view, const size_t bytes);
+    bool Is_Record_Done(BoltMessage& v);
 
     float Negotiate_Version();
     int Send_Hellov5();
     int Send_Hellov4();
 
     // state based handlers
-    inline int Dummy(u8* view, const size_t bytes);
-    inline int Success_Hello(u8* view, const size_t bytes);
-    inline int Success_Run(u8* view, const size_t bytes);
-    inline int Success_Pull(u8* view, const size_t bytes);
-    inline int Success_Record(u8* view, const size_t bytes);
+    inline int Dummy(u8* view, const size_t size);
+    inline int Success_Hello(u8* view, const size_t size);
+    inline int Success_Run(u8* view, const size_t size);
+    inline int Success_Pull(u8* view, const size_t size);
+    inline int Success_Record(u8* view, const size_t size);
+    inline int Success_Reset(u8* view, const size_t size);
 
-    inline int Fail_Hello(u8* view, const size_t bytes);
-    inline int Fail_Run(u8* view, const size_t bytes);
-    inline int Fail_Pull(u8* view, const size_t bytes);
-    inline int Fail_Record(u8* view, const size_t bytes);
+    inline int Fail_Hello(u8* view, const size_t size);
+    inline int Fail_Run(u8* view, const size_t size);
+    inline int Fail_Pull(u8* view, const size_t size);
+    inline int Fail_Record(u8* view, const size_t size);
+    inline int Fail_Reset(u8* view, const size_t size);
+	inline int Handle_Ignored(u8* view, const size_t size);
+
+    inline void Decode_Error(u8* view, const size_t size);
+    
 
     using Success_Fn = int (NeoConnection::*)(u8*, const size_t);
     using Fail_Fn = int (NeoConnection::*)(u8*, const size_t);
@@ -163,6 +174,7 @@ private:
         &NeoConnection::Success_Run,
         &NeoConnection::Success_Pull,
         &NeoConnection::Success_Record,
+        &NeoConnection::Success_Reset,  // error?
     };
 
     Fail_Fn fail_handler[CONNECTION_STATES]{
@@ -173,5 +185,6 @@ private:
         &NeoConnection::Fail_Run,
         &NeoConnection::Fail_Pull,
         &NeoConnection::Fail_Record,
+		&NeoConnection::Fail_Reset,  // error?
     };
 };

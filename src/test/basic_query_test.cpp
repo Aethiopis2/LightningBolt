@@ -16,8 +16,7 @@
  //          INCLUDES
  //===============================================================================|
 #include <chrono>
-#include "connection/neoconnection.h"
-#include "bolt/bolt_response.h"
+#include "neocell.h"
 #include <numeric>
 using namespace std;
 
@@ -36,7 +35,7 @@ struct Test
         "UNWIND RANGE(1, 1000) AS r RETURN r",
         "MATCH (n) RETURN n LIMIT 10        "
     };
-    const int rounds[NUM_TESTS] = { 10, 1000, 100, 100 };
+    const int rounds[NUM_TESTS] = { 10, 100, 100, 1000 };
     const char* spaces[NUM_TESTS] = {
         "                            ",
         "                            ",
@@ -48,26 +47,18 @@ struct Test
 std::vector<int64_t> durs;
 
 
-
-
-//===============================================================================|
-//          FUNCTIONS
-//===============================================================================|
-int main()
+void Test_Record_Fetch()
 {
-    Print_Title();
-
-    Test test;
     const size_t iterations = 1;
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoConnection con(BoltValue({
+        NeoCell con(BoltValue({
             mp("host", "localhost:7687"),
             mp("username", "neo4j"),
             mp("password", "tobby@melona"),
             mp("encrypted", "false")
-            }, false));
+            }));
 
         if (int ret; (ret = con.Start()) < 0)
         {
@@ -85,13 +76,15 @@ int main()
             for (u64 j = 0; j < test.rounds[k]; j++)
             {
                 auto start = std::chrono::high_resolution_clock::now();
-                con.Run_Query(test.cypher[k]);
+                con.Run(test.cypher[k]);
 
                 BoltMessage out;
                 int ret;
 
                 while ((ret = con.Fetch(out)) > 0);
-                //Print("Records: %s", out.records.ToString().c_str());
+                    //Print("Records: %s", out.ToString().c_str());
+
+                //Print("Summary: %s", out.ToString().c_str());
 
                 if (ret < 0)
                 {
@@ -105,9 +98,9 @@ int main()
 
             if (!durs.empty())
             {
-                int64_t total = std::accumulate(durs.begin(), durs.end(), int64_t{ 0 });
+                int64_t total = accumulate(durs.begin(), durs.end(), int64_t{ 0 });
                 int64_t avg = total / static_cast<int64_t>(durs.size());
-                Print("cypher: %s%s\truns: %dx\tAvg time: %lld µs", test.cypher[k],
+                Print("cypher: %s%s\truns: %dx\tAvg time: %lld \u00B5s", test.cypher[k],
                     test.spaces[k], test.rounds[k], avg);
             } // end if 
             else
@@ -122,6 +115,15 @@ int main()
         con.Stop();
         cout << endl;
     } // end outer for
+} // end Test_Record_Fetch
+
+
+int main()
+{
+    Print_Title();
+
+	Print("Testing Record Fetch...");
+	Test_Record_Fetch();
 
     Print("Terminated");
 } // end main

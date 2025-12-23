@@ -32,7 +32,7 @@
 int main() 
 {
     Print_Title();
-    const size_t iterations = 10'000;
+    const size_t iterations = 10;
 
     for (size_t i = 0; i < iterations; i++)
     {
@@ -41,7 +41,7 @@ int main()
 			mp("username", "neo4j"),
 			mp("password", "tobby@melona"),
 			mp("tls", "false")
-            }, false));
+            }));
 
         if (int ret; (ret = con.Start()) < 0)
         {

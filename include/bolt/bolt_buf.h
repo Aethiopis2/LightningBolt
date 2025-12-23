@@ -124,6 +124,11 @@ public:
             assert(data);
     } // end Bolt Buf
 
+    BoltBuf(const BoltBuf&) = delete;
+    BoltBuf& operator=(const BoltBuf&) = delete;
+    BoltBuf(BoltBuf&&) noexcept = default;
+    BoltBuf& operator=(BoltBuf&&) noexcept = default;
+
     //===============================================================================|
     /**
      * @brief return's the head of the write ptr
