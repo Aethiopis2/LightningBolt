@@ -32,18 +32,18 @@
 int main() 
 {
     Print_Title();
-    const size_t iterations = 10;
+    const size_t iterations = 10'000;
 
     for (size_t i = 0; i < iterations; i++)
     {
         NeoCell con(BoltValue({
 			mp("host", "localhost:7687"),
 			mp("username", "neo4j"),
-			mp("password", "tobby@melona"),
+			mp("password", ""),
 			mp("tls", "false")
             }));
 
-        if (int ret; (ret = con.Start()) < 0)
+        if (int ret; (ret = con.Start(i+1)) < 0)
         {
             if (ret == -1)
 				Dump_Err_Exit("Failed to connect to the server");

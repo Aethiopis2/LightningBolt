@@ -27,7 +27,8 @@
  * @param con_string the connection string to connect to neo4j server
  */
 NeoCell::NeoCell(BoltValue params)
-	: conn_params(params) { } // end NeoQE
+	: connection(params), running(false), qcount(0), is_shutting_down(false),
+	results_function(nullptr) { } // end NeoQE
 
 
 /**
@@ -47,470 +48,36 @@ NeoCell::~NeoCell()
  *  followed by LOGON message for v5.0+. During handshake, should peer closes the connection
  *  the function attempts reconnect a couple of more times before giving up.
  * 
+ * @param id application defined connection identifer
+ * 
  * @return 0 on success. -1 on sys error, -2 app speific error s.a version not supported
  */
-int NeoCell::Start()
+int NeoCell::Start(const int id)
 {   
-	ConnectionState s = connection.Get_State();
-    if (s != ConnectionState::Disconnected)
-    {
-        err_string = "connection already started";
-        return -2;      // app error
-	} // end if already started
+	if (int ret; (ret = connection.Init(id)) < 0)
+		return ret;
 
-    if (connection.Init(&conn_params, 0) < 0)
-        return -1;      // sys error in all cases
-
-    const int total_tries = 100;
-    int try_count = 0;
-    int pool_offset = conn_params.pool->Get_Last_Offset();
-
-try_again:
-
-    connection.Set_State(ConnectionState::Connecting);
-    if ( (sup_version = connection.Negotiate_Version()) >= 0)
-    {
-        if (sup_version >= 6.0 || sup_version >= 5.1)   // use version 6/5 hello
-        {
-            if (connection.Send_Hellov5() < 0)
-                return -1;
-        } // end if v5.1+
-        else if (sup_version >= 1.0)          // version 4 and below 
-        {
-            if (connection.Send_Hellov4() < 0)
-                return -1;
-        } // end else if legacy
-        else
-        {
-            err_string = "unsupported negotiated version";
-            connection.Disconnect();
-            return -2;
-        } // end else
-    } // end if Negotiate
-
-    // wait on response 
-    if (int ret; (ret = connection.Poll_Readable()) < 0)
-    {
-        if (ret == -3)
-        {
-            // connection closed by peer;
-            // attempt reconnection a few more
-            if ( (ret = connection.Reconnect()) < 0)
-            {
-                if (try_count++ < total_tries)
-                    goto try_again;
-                else return ret;
-            } // end else
-        } // end if
-
-        return ret;
-    } // end if
-
-    // cleanup any extra params
-	Release_Pool<BoltValue>(pool_offset);
+	Add_QCount();
+	Set_Running(true);
+	write_thread = std::thread(&NeoCell::Write_Loop, this);
+	read_thread = std::thread(&NeoCell::Read_Loop, this);
     return 0;
 } // end Start
 
 
-/**
- * @brief runs a cypher query against the connected neo4j database. The driver
- *  must be in ready state to accept queries. The function appends a PULL/ALL
- *  message after the RUN message to begin fetching results.
- *
- * @param cypher the cypher query string
- * @param params optional parameters for the cypher query
- * @param extras optional extra parameters for the cypher query (see bolt specs)
- * @param n optional the numbe r of chunks to request, i.e. 1000 records
- *
- * @return 0 on success and -2 on application error
- */
-int NeoCell::Run(const char* cypher, BoltValue params, BoltValue extras,
-    const int n)
+int NeoCell::Enqueue_Request(RequestParams&& req)
 {
-    // its ok to pipline calls too
-	ConnectionState state = connection.Get_State();
-    if (state != ConnectionState::Ready && state != ConnectionState::Run)
-    {
-        err_string = "invalid state: " + connection.State_ToString();
-        return -2;  // app error
-    } // end if
+	results_function = req.results_func;
+	if (!request_queue.Enqueue(std::move(req)))
+	{
+		results_function(-1, nullptr);
+		return -2;
+	} // end if not enqueued
+
+	Add_QCount();
+	return 0;
+} // end Enqueue_Request
 
-    // encode and flush cypher query, append a pull too
-    BoltMessage run(
-        BoltValue(BOLT_RUN, {
-            cypher,
-            params,
-            extras
-            })
-    );
-
-    connection.encoder.Encode(run);
-    Encode_Pull(n);
-    connection.Flush();
-
-    // update the state and number of queries piped, also set the poll flag
-    //  to signal recv to wait on block for incoming data
-    connection.Set_State(ConnectionState::Run);
-    num_queries++;
-    connection.has_more = true;
-
-    return 0;
-} // end Run_Query
-
-
-/**
- * @brief fetches the next record from the server after a RUN/PULL command.
- *  The function decodes into a BoltMessage object that can be inspected
- *  for record data or summary meta info.
- *
- * @param out the output message object to decode into
- *
- * @return 0 on completion, 1 if more records to come, -1 on sys error, 
- *  -2 on app error
- */
-int NeoCell::Fetch(BoltMessage& out)
-{
-	ConnectionState state = connection.Get_State();
-    if (state == ConnectionState::Run || state == ConnectionState::Pull)
-    {
-        // expecting success/fail for run message
-        connection.has_more = true;
-        if (int ret; (ret = connection.Poll_Readable()) < 0)
-        {
-            // check error satate
-            state = connection.Get_State();
-            if (state == ConnectionState::Error)
-            {
-                // its either a run or pull error, attempt to reset
-                //  to clean this connection
-                connection.has_more = true;     // poll for reset
-				return Reset();     // return reset status, terminate fetch on success
-            } // end if error state
-
-            return ret;
-		} // end if poll error
-
-		state = connection.Get_State();
-    } // end if ready
-
-    if (state == ConnectionState::Streaming)
-    {
-        // we're streaming bytes
-        int bytes = connection.decoder.Decode(connection.view.cursor, out);
-
-        // advance the cursor by the bytes
-        connection.view.cursor += bytes;
-        connection.view.offset += (size_t)bytes;
-
-        // test if we completed?
-        if (out.msg.struct_val.tag == BOLT_SUCCESS)
-        {
-            if (!connection.Is_Record_Done(out))
-				return 1;   // more records to come
-
-            connection.view.summary_meta = out.msg;
-			connection.read_buf.Reset();    // reset the read buffer for next rounds
-            return 0;
-        } // end if
-
-		// we're not done yet
-        if (connection.view.offset >= connection.view.size)
-            connection.Set_State(ConnectionState::Pull);
-    } // end else if streaming
-
-    return 1;
-} // end Fetch
-
-
-/**
- * @brief Begins a transaction with the database, this is a manual transaction
- *  that requires commit or rollback to finish.
- *
- * @param options optional parameters for the transaction
- *
- * @return 0 on success -1 on system error -2 on application error
- */
-int NeoCell::Begin(const BoltValue& options)
-{
-    if (transaction_count++ > 0)
-        return 0;       // already has some
-
-	// keep track of pool, from here on we allocate from it
-	size_t offset = conn_params.map_val.size << 1;
-
-    BoltMessage begin(
-        BoltValue(BOLT_BEGIN, {
-            options
-            })
-    );
-
-    connection.encoder.Encode(begin);
-    if (!connection.Flush())
-    {
-		Release_Pool<BoltValue>(offset);
-        return -1;
-    } // end if no flush
-
-
-    // wait for success
-    int ret = connection.Poll_Readable();
-    Release_Pool<BoltValue>(offset);
-    
-    return ret;
-} // end Begin_Transaction
-
-
-/**
- * @brief Commits the current transaction, this is a manual transaction that
- *  requires Begin_Transaction to start.
- *
- * @param options optional parameters for the commit
- *
- * @return 0 on success -1 on system error -2 on application error
- */
-int NeoCell::Commit(const BoltValue& options)
-{
-    if (transaction_count-- > 0)
-        return 0;       // got a few more
-
-    // keep track of pool, from here on we allocate from it
-    size_t offset = conn_params.map_val.size << 1;
-
-    BoltMessage commit(
-        BoltValue(BOLT_COMMIT, {
-            options
-            })
-    );
-    
-    connection.encoder.Encode(commit);
-    if (!connection.Flush())
-		return -1;
-
-    // wait for success
-    int ret = connection.Poll_Readable();
-	Release_Pool<BoltValue>(offset);
-
-    return ret;
-} // end Commit_Transaction
-
-
-/**
- * @brief Rolls back the current transaction, this is a manual transaction that
- *  requires Begin_Transaction to start.
- *
- * @param options optional parameters for the rollback
- *
- * @return 0 on success -1 on system error -2 on application error
- */
-int NeoCell::Rollback(const BoltValue& options)
-{
-    if (transaction_count-- > 0)
-        return 0;       // not yet
-
-    // keep track of pool, from here on we allocate from it
-    size_t offset = conn_params.map_val.size << 1;
-
-    BoltMessage rollback(
-        BoltValue(BOLT_ROLLBACK, {
-            options
-            })
-    );
-    
-    connection.encoder.Encode(rollback);
-    if (!connection.Flush())
-        return -1;
-
-    // wait for success
-    int ret = connection.Poll_Readable();
-    Release_Pool<BoltValue>(offset);
-
-    return ret;
-} // end Rollback_Transaction
-
-
-/*@brief encodes a PULL message and sends it. Useful during reactive style fetch
-*
-* @param n the number of chunks to to fetch at once, defaulted to - 1 to fetch
-* everything.
-*
-* @return 0 on success -1 on sys error, left for caller to decide its fate
-*/
-int NeoCell::Pull(const int n)
-{
-    Encode_Pull(n);
-    if (!connection.Flush())
-        return -1;
-
-    return 0;
-} // end Pull
-
- 
-/**
- * @brief encodes a DISCARD message and sends it. Useful during reactive style fetch
- * 
- * @param n the number of chunks to to discard at once, defaulted to -1 to discard
- * 
- * @return 0 on success -1 on sys error, left for caller to decide its fate
- */
-int NeoCell::Discard(const int n)
-{
-	ConnectionState state = connection.Get_State();
-    if (state != ConnectionState::Streaming)
-        return 0;       // ignore
-
-	size_t offset = conn_params.map_val.size << 1;  
-
-    BoltValue bv(BOLT_DISCARD, {
-        BoltValue({
-            mp("n", n),
-            mp("qid", connection.client_id)
-            })
-        });
-
-    if (!connection.Flush_And_Poll(bv))
-    {
-        Release_Pool<BoltValue>(offset);
-        return -1;
-	} // end if
-
-	Release_Pool<BoltValue>(offset);
-    return 0;
-} // end Discard
-
-
-/**
- * @brief sends a TELEMETRY message to server with the api level used by client.
- *  This is a v5.1+ feature.
- * 
- * @param api the api level used by client
- * 
- * @return 0 on success, -1 on sys error
- */
-int NeoCell::Telemetry(const int api)
-{
-	ConnectionState state = connection.Get_State();
-    if (state != ConnectionState::Ready)
-        return 0;       // ignore
-
-	size_t offset = conn_params.map_val.size << 1;
-
-    BoltValue bv(BOLT_TELEMETRY, { api });
-    if (!connection.Flush_And_Poll(bv))
-    {
-        Release_Pool<BoltValue>(offset);
-        return -1;
-	} // end if
-
-	Release_Pool<BoltValue>(offset);
-    return 0;
-} // end Telemetry
-
-
-/**
- * @brief resets the current active connection should it be in FAILED state.
- *  The client connection then must reset its state to READY before accepting
- *  any more new requests. The state of the connection must be in ERROR state
- *  prior to calling this function.
- * 
- * @return 0 on success always
- */
-int NeoCell::Reset()
-{
-	// memorize the last pool offset to cleanup later
-	size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
-
-	ConnectionState state = connection.Get_State();
-    if (state != ConnectionState::Error)
-        return 0;
-
-    BoltValue bv(BOLT_RESET, {});
-    if (!connection.Flush_And_Poll(bv))
-    {
-        Release_Pool<BoltValue>(offset);
-        return -2;  // connection is closed with details in last error
-	} // end if
-
-	Release_Pool<BoltValue>(offset);
-    return 0;
-} // end Reset
-
-
-/**
- * @brief sends a LOGOFF message to server to gracefully logoff from the
- *  current active connection. This is a v5.1+ feature.
- * 
- * @return 0 on success always
- */
-int NeoCell::Logoff()
-{
-	// get the last offset in the pool to cleanup later
-	size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
-
-    ConnectionState s = connection.Get_State();
-    if (s == ConnectionState::Disconnected)
-        return 0;       // ignore
-
-    connection.Set_State(ConnectionState::Connecting);
-    BoltMessage off(BoltValue(BOLT_LOGOFF, {}));
-    connection.encoder.Encode(off);
-
-	// ignore the response, closing anyways
-    connection.Flush_And_Poll(off.msg);
-
-	Release_Pool<BoltValue>(offset);
-    return 0;
-} // end Logoff
-
-
-/**
- * @brief sends a GOODBYE message to server to gracefully close the current
- *  active connection.
- * 
- * @return 0 on success, -1 on sys error
- */
-int NeoCell::Goodbye()
-{
-	// memorize last pool offset to cleanup later
-	size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
-
-	ConnectionState state = connection.Get_State();
-    if (state == ConnectionState::Disconnected)
-        return 0;       // already done
-
-    BoltValue gb(BoltValue(BOLT_GOODBYE, {}));
-    connection.encoder.Encode(gb);
-
-    if (!connection.Flush())
-        return -1;
-
-	Release_Pool<BoltValue>(offset);
-    return 0;
-} // end Goodbye
-
-
-/**
- * @brief this is an old skool way of error handling in neo4j bolt protocol. It
- *  basically acknowledges the last failure message sent by server and resets
- * I wrote it for completeness.
- * 
- * @eturn 0 on success, -1 on sys error
- */
-int NeoCell::Ack_Failure()
-{
-    // memorize last pool offset to cleanup later
-    size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
-
-	ConnectionState s = connection.Get_State();
-    if (s != ConnectionState::Error)
-        return 0;       // already done
-
-    BoltValue ack(BoltValue(BOLT_ACK_FAILURE, {}));
-    if (!connection.Flush_And_Poll(ack))
-        return -1;
-
-    Release_Pool<BoltValue>(offset);
-    return 0;
-} // end Failure
 
 
 /**
@@ -527,38 +94,165 @@ std::string NeoCell::Get_Last_Error() const
  */
 void NeoCell::Stop()
 {
-    ConnectionState s = connection.Get_State();
-    if (s != ConnectionState::Disconnected)
-    {
-        // would be ignored if not supported anyways
-        if (sup_version >= 5.1)
-            Logoff();
+	if (connection.Is_Closed())
+		return;
 
-        Goodbye();
-    } // end if not connecting
+	// last minute burner...
+	is_shutting_down.store(true, std::memory_order_release);
+	qcount.notify_all();
+	Wait_Thread();
 
+	if (connection.supported_version.major >= 5)
+	{
+		if (connection.Logoff() < 0) Sub_QCount();
+		else Add_QCount();
+
+		Wait_Thread();
+	} // end if ver >= 5+
 	connection.Terminate();
+
+	Set_Running(false);
+	if (write_thread.joinable()) write_thread.join();
+	if (read_thread.joinable()) read_thread.join();
 } // end Stop
 
 
-//===============================================================================|
 /**
- * @brief encodes a PULL message after a RUN command to fetch all results.
- *
- * @param n the number of chunks to to fetch at once, defaulted to -1 to fetch
- *  everything.
+ * @brief sets the running state of the cell
  */
-void NeoCell::Encode_Pull(const int n)
+void NeoCell::Set_Running(const bool state)
 {
-    // memorize last pool offset to cleanup later
-    size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
+	running.store(state, std::memory_order_release);
+} // end Set_Running
 
-    BoltMessage pull(BoltValue(
-        BOLT_PULL, {
-            {mp("n", n), mp("qid",-1)}
-        }));
 
-    connection.encoder.Encode(pull);
+/**
+ * @brief returns true if the cell is running
+ */
+bool NeoCell::Is_Running() const
+{
+	return running.load(std::memory_order_acquire);
+} // end Is_Running
 
-	Release_Pool<BoltValue>(offset);
-} // end Send_Pull
+
+/**
+ * @brief the main writer loop that services queued requests, if any. Should
+ *	the queue be empty the thread goes to sleep until woken up by Add_Writer_Ref().
+ */
+void NeoCell::Write_Loop()
+{
+	while (Is_Running())
+	{
+		if (!request_queue.Is_Empty())
+		{
+			auto req = request_queue.Dequeue();
+			if (req.has_value())
+			{
+				if (connection.Run(req->cypher.c_str(), req->params, req->extras) < 0)
+					break;
+
+			} // end if has value
+		} // end if not empty
+		else
+		{
+			Sleep_Thread();
+		} // end else
+	} // end while running
+} // end Write_Loop
+
+
+void NeoCell::Read_Loop()
+{
+	while (Is_Running())
+	{
+		if (Get_QCount() > 0)
+		{
+			if (int ret; (ret = connection.Poll_Readable()) < 0)
+			{
+				if (ret >= -2)
+					break;
+			} // end if readable
+
+			//if (results_function)
+			//{
+			//	BoltMessage msg;
+			//	int fetch_ret = connection.Fetch(msg);
+			//	results_function(fetch_ret, nullptr);
+			//} // end if results func callback
+
+			Sub_QCount();		// this one is processed
+		} // end if
+		else
+		{
+			Sleep_Thread();
+		} // end else sleeping
+	} // end while running
+} // end Read_Loop
+
+
+/**
+ * @brief adds 1 to track the active queries being processed by the 
+ *	writer thread. If thread was sleeping it wakes it up using notify_one(),
+ *	it does so only once and when the first query is being processed for the
+ *	batch.
+ */
+void NeoCell::Add_QCount()
+{
+	int prev = qcount.fetch_add(1, std::memory_order_relaxed);
+	if (prev == 0)
+		qcount.notify_one();
+} // end Toggle_Writer_State
+
+
+/**
+ * @brief subtracts 1 to track active queries left to process. Is called
+ *	after the processing of a query is done, and when the count reaches
+ *	down to 0, it calls notify_one() to activate any waiting processes.
+ *	Useful if waiting on a task to compelete.
+ */
+void NeoCell::Sub_QCount()
+{
+    int prev = qcount.fetch_sub(1, std::memory_order_acq_rel);
+	if (prev == 1)
+		qcount.notify_one();
+} // end Scout_Loop
+
+
+/**
+ * @brief puts the thead to sleep until the qcount atomic has something
+ *	in it, i.e. has at least one task/query to process. On the fist task 
+ *	or when qcount == 1, the function breaks the loop
+ */
+void NeoCell::Sleep_Thread()
+{
+	int prev = Get_QCount();
+	while (prev <= 0 && !is_shutting_down.load(std::memory_order_acquire))
+	{
+		qcount.wait(prev);
+		prev = Get_QCount();
+	} // end while
+} // end Sleep_Writer_Ref
+
+
+/**
+ * @brief puts the thread in waiting mode until all active tasks/queries
+ *	have been processesed, i.e. qcount == 0.
+ */
+void NeoCell::Wait_Thread()
+{
+	int prev = Get_QCount();
+	while (prev > 0 && Is_Running())
+	{
+	    qcount.wait(prev);
+	    prev = Get_QCount();
+	} // end while
+} // end Wait_Thread
+
+
+/**
+ * @brief returns the current qcount
+ */
+int NeoCell::Get_QCount() const
+{
+	return qcount.load(std::memory_order_acquire);
+} // end Get_Writer_State

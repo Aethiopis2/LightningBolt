@@ -101,6 +101,8 @@ public:
         }
 	} // end Enqueue_Command
 
+    //std::vector<long long>& Latencies() { return latencies; }
+
 private:
 
 	NeoCell cell;                           // the underlying NeoCell instance
@@ -108,6 +110,8 @@ private:
     std::thread worker_thread;              // thread handle
 	LockFreeQueue<CellCommand> queue;       // command queue; handles multiple requests
 
+    // owned, no locks
+    //std::vector<long long> latencies;
 
     /**
      * @brief the main worker loop that processes commands from the queue
@@ -125,7 +129,17 @@ private:
                 continue;
 			} // end if no cmd
 
+            //auto start = std::chrono::high_resolution_clock::now();
+            
             Execute(cmd_opt.value());
+
+            /*auto end = std::chrono::high_resolution_clock::now();
+            long long us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    end - start
+                ).count();*/
+
+            //latencies.push_back(us);
 		} // end while running
 
 		cell.Stop();

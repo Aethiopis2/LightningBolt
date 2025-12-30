@@ -119,14 +119,17 @@ public:
 
 
     /**
-     * @brief toggles socket to either blocking or non blocking mode on every call
+	 * @brief Sets the socket to a non-blocking mode
      */
-    int Toggle_NonBlock()
+    int Set_NonBlock()
     {
-        int flags = fcntl(fd, F_GETFL, 0);
-        if (fcntl(fd, F_SETFL, flags ^ O_NONBLOCK) < 0)
+        int flags = fcntl(fd, F_GETFL);
+        if (flags == -1)
             return -1;
-        
+
+        if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+            return -1;
+
         return 0;
     } // end Toggle_NonBlock
 

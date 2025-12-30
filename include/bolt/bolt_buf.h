@@ -271,14 +271,17 @@ public:
 
     //===============================================================================|
     /**
-     * @brief 
+	 * @brief allows growing the buffer based on recent traffic stats or requested 
+	 *  size
      * 
      * @param n sizeof the chunk requested
+     * 
+	 * @return 0 on success/ignored -1 on failure
      */
-    inline void Grow(const size_t n)
+    inline int Grow(const size_t n)
     {
         if (!stat.Should_Grow(capacity) && (write_offset + n <= capacity - TAIL_SIZE))
-            return; 
+            return 0;   // no need of growth 
         
         size_t new_capacity = capacity << 1;
         while (write_offset + n > new_capacity - TAIL_SIZE)
@@ -286,7 +289,7 @@ public:
 
         auto new_raw_ptr = Allocate_Aligned(new_capacity);
         if (!new_raw_ptr)
-            return;
+			return -1;      // failed to allocate
 
         u8* new_data = new_raw_ptr.get();
         iCpy(new_data, data, write_offset);
@@ -294,6 +297,8 @@ public:
         raw_ptr = std::move(new_raw_ptr);
         data = new_data;
         capacity = new_capacity;
+
+		return 0;  // success
     } // end Grow
 
     //===============================================================================|

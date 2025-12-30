@@ -69,12 +69,21 @@ public:
 	 */
 	NeoCellWorker* Acquire()
 	{
-		size_t i = rr.fetch_add(1, std::memory_order_relaxed);
-		return workers[i % workers.size()].get();
+		int idx = idx_counter.fetch_add(1, std::memory_order_relaxed) % workers.size();
+        return workers[idx].get();
 	} // end Acquire
+
+
+	/**
+	 * @brief gets the list of all workers
+	 */
+	const std::vector<std::unique_ptr<NeoCellWorker>>& Workers() const 
+	{
+		return workers;
+	} // end Workers
 
 private:
 
 	std::vector<std::unique_ptr<NeoCellWorker>> workers;	// pool of workers
-	std::atomic<size_t> rr{ 0 };
+	std::atomic<size_t> idx_counter{ 0 };
 };

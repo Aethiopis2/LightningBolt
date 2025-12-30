@@ -21,6 +21,16 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
+using ResultCallback = void(*)(int result, void* user);
+
+struct RequestParams
+{
+    std::string cypher;
+    BoltValue params;
+    BoltValue extras;
+
+    ResultCallback results_func = nullptr;
+};
 
 
 
@@ -34,53 +44,45 @@ public:
     NeoCell(BoltValue params);
     ~NeoCell();
 
-    int Start();
-    int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
-        BoltValue extras = BoltValue::Make_Map(), const int chunks = -1);
-    int Fetch(BoltMessage& out);
-    int Begin(const BoltValue& options = BoltValue::Make_Map());
-    int Commit(const BoltValue& options = BoltValue::Make_Map());
-    int Rollback(const BoltValue& options = BoltValue::Make_Map());
-    int Pull(const int n);
-    int Discard(const int n);
-    int Telemetry(const int api);
-    int Reset();
-    int Logoff();
-    int Goodbye();
-    int Ack_Failure();
+    int Start(const int id = 1);
+	int Enqueue_Request(RequestParams&& req);
 
-    std::string Get_Last_Error() const;
     void Stop();
+    void Set_Running(const bool state);
+
+	bool Is_Running() const;
+    std::string Get_Last_Error() const;
 
 private:
 
-    float sup_version;      // the supported bolt version set from server
-    bool standalone_mode;   // one of the two modes; false = routed clusters, true = standalone
+    std::atomic<bool> running;          // thread loop controller
+    std::atomic<bool> is_shutting_down; // signals if process is shutting down
+	std::atomic<int> qcount;            // tracks the active queries in progress, and 
+        // acts as a signal controller to read/write threads and close processes
 
-    int num_queries;        // number of active pipelined queries
-    int transaction_count;  // counts the number of active transactions before committing
-
-    std::string err_string; // application error info
-
-    BoltValue conn_params;    // store's map of connection parameters for later use
+    std::thread write_thread;       // writer thread id
+    std::thread read_thread;        // reader therad id
+	NeoConnection connection;       // a connection instance; either standalone or routed
+	LockFreeQueue<RequestParams> request_queue;   // request queue for the cell
     
+	void Write_Loop();
+	void Read_Loop();
+    void Add_QCount();
+    void Sub_QCount();
+	void Sleep_Thread();
+    void Wait_Thread();
 
-    // connections
-	NeoConnection connection;        // a connection instance; either standalone or routed
+    int Get_QCount() const;
 
-    struct RouteTable
-    {
-        std::string writer;     // address to leader in a cluster
-        std::vector<std::string> readers;   // bunch of replica + followers in a cluster
-        std::vector<std::string> routes;    // redundant from our perpective but can mask out replicas
-        std::string database;               // which database is in the cluster
-        s64 ttl;                // time to live, route refresh rate as defined by server
-    };
+    ResultCallback results_function;
+    //struct RouteTable
+    //{
+    //    std::string writer;     // address to leader in a cluster
+    //    std::vector<std::string> readers;   // bunch of replica + followers in a cluster
+    //    std::vector<std::string> routes;    // redundant from our perpective but can mask out replicas
+    //    std::string database;               // which database is in the cluster
+    //    s64 ttl;                // time to live, route refresh rate as defined by server
+    //};
 
-    RouteTable route_table;     // instance
-
-    //====================
-    // utilities
-    //====================
-    void Encode_Pull(const int n);
+    //RouteTable route_table;     // instance
 };

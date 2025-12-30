@@ -84,6 +84,9 @@ public:
         return item;
     } // end Dequeue
 
+    /**
+     * @brief returns a reference to the front item without dequeuing it
+	 */
     std::optional<std::reference_wrapper<T>> Front()
     {
         size_t pos = head.load(std::memory_order_relaxed);
@@ -93,6 +96,10 @@ public:
         return std::ref(buffer[pos].value);
     } // end front
 
+
+    /**
+	 * @brief access item at given index without dequeuing it
+     */
     std::optional<T> operator[](const size_t index)
     {
         if (!buffer[index].full.load(std::memory_order_acquire))
@@ -115,6 +122,12 @@ public:
         return (t + Capacity - h) & (Capacity - 1);
     } // end Size
 
+
+    void Clear()
+    {
+        head.store(0, std::memory_order_release);
+        tail.store(0, std::memory_order_release);
+    } // end Clear
 
 private:
     static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be power of two");
