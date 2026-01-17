@@ -32,7 +32,7 @@
 int main() 
 {
     Print_Title();
-    const size_t iterations = 10'000;
+    const size_t iterations = 10000;
 
     for (size_t i = 0; i < iterations; i++)
     {

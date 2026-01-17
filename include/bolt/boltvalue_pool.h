@@ -23,8 +23,8 @@
 //===============================================================================|
 //          GLOBALS
 //===============================================================================|
-constexpr u32 SCRATCH_SIZE = 512;     // static array size for scratch buffers
-constexpr u32 ARENA_SIZE = 1024;      // size of the fast growing buffer
+constexpr u32 SCRATCH_SIZE = 1024;      // static array size for scratch buffers
+constexpr u32 ARENA_SIZE = 4096;        // size of the fast growing buffer
 
 
 

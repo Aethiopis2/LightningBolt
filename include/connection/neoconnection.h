@@ -16,6 +16,7 @@
 #include "connection/tcp_client.h"
 #include "bolt/bolt_decoder.h"
 #include "bolt/bolt_encoder.h"
+#include "bolt/decoder_task.h"
 #include "utils/lock_free_queue.h"
 
 
@@ -24,67 +25,23 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
-/**
- * LightningBolt states over bolt
- */
-enum class QueryState : u8 {
-    Connection,     // special 1: used during HELLO 
-    Logon,          // special 2: used in v5.x+ after HELLO
-	Logoff,         // special 3: expecting logoff success/fail message
-
-    Run,            // driver is expecting run success/fail message
-    Pull,           // driver is expecting pull success/fail message
-    Streaming,      // driver is in a streaming state; i.e. reading buffer
-	Discard,        // driver is expecting discard success/fail message
-	Begin,          // driver is expecting begin trx success/fail message
-	Commit,         // driver is expecting commit trx success/fail message
-	Rollback,       // driver is expecting rollback trx success/fail message
-	Route,          // driver is expecting route success/fail message
-    Reset,          // driver is expecting reset success/fail message
-	Telemetry,      // driver is expecting telemetry success/fail message
-	Ack_Failure,    // driver is expecting ack_failure success/fail message
-    Error,          // driver has encountered errors  
-};
-constexpr int QUERY_STATES = 15;
-
-
-
-/**
- * @brief the result of a bolt query. It consists of three fields, the fields
- *  names for the query result, a list of records, and a summary detail, as per
- *  driver specs for neo4j
- */
-struct BoltResult
-{
-    BoltMessage fields;           // the field names for the record
-    BoltMessage records;          // the actual list of records returned
-    BoltMessage summary;          // the summary message at end of records
-};
-
-
-
-/**
- * @brief a view points at the next row/value to decode in a single
- *  bolt request/query. Since Bolt returns pipelined requests in the order
- *  sent, we can queue each response for processing in a ring buffer.
- */
-struct BoltView
-{
-    u8* cursor;                 // the current address
-    u64 offset;                 // the cursor offset
-    size_t size;                // the size of view into buffer
-    BoltResult result;          // the result for this query
-};
+using EncodeCallback = void(*)(int result, void* user);
+using ResultCallback = void(*)(BoltResult&);
 
 
 /**
  * @brief holds the state of a pipelined query along with its view into
- *  the buffer
+ *  the buffer and the decoded results that point right at that buffer
+ *  which can be shallow copied to a caller.
  */
-struct QueryInfo
+struct DecoderTask
 {
     QueryState state;       // current state of the query
     BoltView view;          // view into the buffer for this query
+    BoltResult result;      // results of bolt values
+
+    ResultCallback cb = nullptr;    // a callback for async procs ideal for web apps.
+    EncodeCallback ecb = nullptr;
 };
 
 
@@ -97,7 +54,13 @@ struct Neo4jVerInfo
     u8 reserved[2];
     u8 minor;
     u8 major;
+
+    float Get_Version() const
+    {
+        return static_cast<float>(major) + (static_cast<float>(minor) / 10.0f);
+    } // end Get_Version
 };
+
 
 
 //===============================================================================|
@@ -128,7 +91,8 @@ public:
     int Init(const int cli_id = -1);
     int Reconnect();
     int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
-        BoltValue extras = BoltValue::Make_Map(), const int chunks = -1);
+        BoltValue extras = BoltValue::Make_Map(), const int chunks = -1,
+        EncodeCallback encb = nullptr, ResultCallback rscb = nullptr);
     int Fetch(BoltMessage& out);
 
     int Begin(const BoltValue& options = BoltValue::Make_Map());
@@ -151,6 +115,7 @@ public:
     void Terminate();
     void Set_ClientID(const int cli_id);
 	void Set_Host_Address(const std::string& host, const std::string& port);
+    void Set_Callbacks(EncodeCallback ecall, ResultCallback rscb);
 
     std::string Get_Last_Error() const;
     std::string State_ToString() const;
@@ -158,14 +123,14 @@ public:
 private: 
     
     int client_id;          // connection identifier
-	int tran_count;		    // number of transactions executed; simulates nesting  
-    bool has_more;          // sentinel for recv loop
+	int tran_count;		    // number of transactions executed; simulates nesting
 	bool is_open;           // connection flag
     size_t bytes_recvd;     // helper that store's the number of bytes to decode
-
     std::string err_string; // store's a dump of error
-	LockFreeQueue<QueryInfo> query_states;       // queue of pipelined queries
-    Neo4jVerInfo supported_version;             // holds major and minor versions for server
+
+	LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses
+    LockFreeQueue<BoltResult> results;      // queue of query reults decoded
+    Neo4jVerInfo supported_version;         // holds major and minor versions for server
 
     // storage buffers
     BoltBuf read_buf;
@@ -193,15 +158,15 @@ private:
     bool Negotiate_Version();
 
     // state based handlers
-    inline int Dummy(BoltView& view);
-    inline int Success_Hello(BoltView& view);
-    inline int Success_Run(BoltView& view);
-    inline int Success_Record(BoltView& view);
-    inline int Success_Reset(BoltView& view);
+    inline int Dummy(DecoderTask& task, int& skip);
+    inline int Success_Hello(DecoderTask& task, int& skip);
+    inline int Success_Run(DecoderTask& task, int& skip);
+    inline int Success_Record(DecoderTask& task, int& skip);
+    inline int Success_Reset(DecoderTask& task, int& skip);
 
-    inline int Handle_Record(BoltView& view);
-	inline int Handle_Failure(BoltView& view);
-	inline int Handle_Ignored(BoltView& view);
+    inline int Handle_Record(DecoderTask& task, int& skip);
+	inline int Handle_Failure(DecoderTask& task, int& skip);
+	inline int Handle_Ignored(DecoderTask& task, int& skip);
 
     void Encode_Pull(const int n);
 
@@ -214,7 +179,7 @@ private:
         const std::string& database);
     BoltMessage Route_Legacy(const BoltValue& routing);
 
-    using Success_Fn = int (NeoConnection::*)(BoltView&);
+    using Success_Fn = int (NeoConnection::*)(DecoderTask&, int&);
     Success_Fn success_handler[QUERY_STATES]{
         &NeoConnection::Success_Hello,
         &NeoConnection::Success_Hello,

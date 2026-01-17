@@ -56,23 +56,23 @@ constexpr int QUERY_COUNT = 1000;
 std::vector<uint64_t> latencies_ns(QUERY_COUNT);
 
 // -------------------- callbacks --------------------
-
-void QueryLatencyCallback(int rc, void* userdata)
+std::vector<TimingCtx> ctx;
+void QueryLatencyCallback(BoltResult& res)
 {
-    auto* ctx = static_cast<TimingCtx*>(userdata);
 
     uint64_t end = now_ns();
-    latencies_ns[ctx->slot] = end - ctx->start_ns;
+    int s = records.load();
 
+    latencies_ns[ctx[s].slot] = end - ctx[s].start_ns;
+    records.fetch_add(1, std::memory_order_relaxed);
     completed.fetch_add(1, std::memory_order_relaxed);
 
-    delete ctx; // safe: owned by callback
 }
 
 void FetchCallbackFn(BoltMessage* msg, int status, void*)
 {
-    if (msg)
-        records.fetch_add(1, std::memory_order_relaxed);
+    /*if (msg)
+        records.fetch_add(1, std::memory_order_relaxed);*/
 }
 
 // -------------------- main test --------------------
@@ -84,7 +84,7 @@ int main()
         BoltValue({
             mp("host", "localhost:7687"),
             mp("username", "neo4j"),
-            mp("password", "tobby@melona"),
+            mp("password", ""),
             mp("encrypted", "false")
         })
     );
@@ -97,14 +97,14 @@ int main()
 
     for (int i = 0; i < QUERY_COUNT; ++i)
     {
-        NeoCellWorker* cell = pool.Acquire();
+        NeoCell* cell = pool.Acquire();
 
         int slot = index.fetch_add(1, std::memory_order_relaxed);
 
-        auto* ctx = new TimingCtx{
-            .start_ns = now_ns(),
-            .slot = slot
-        };
+        ctx.push_back({
+            now_ns(),
+            slot
+        });
 
         {
             CellCommand cmd;
@@ -113,16 +113,16 @@ int main()
             cmd.params = BoltValue::Make_Map();
             cmd.extras = BoltValue::Make_Map();
             cmd.cb = QueryLatencyCallback;
-            cmd.user = ctx;
-            cell->Enqueue(std::move(cmd));
+            //cmd.ctx = ctx;
+            cell->Enqueue_Request(std::move(cmd));
         }
 
-        {
+       /* {
             CellCommand cmd;
             cmd.type = CellCmdType::Fetch;
             cmd.fetch_cb = FetchCallbackFn;
             cell->Enqueue(std::move(cmd));
-        }
+        }*/
     }
 
     // wait for completion

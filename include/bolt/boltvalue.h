@@ -1,8 +1,4 @@
 ﻿/**
- * @brief defintion of BoltValue that is an abstraction of neo4j types defined in
- *  boltprotocol using PackStream format. The goal here is to come up with a structure
- *  that abstracts neo4j types without sacrificing speed and making excessive copy.
- * 
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
  * @version 1.0
@@ -136,9 +132,10 @@ enum class BoltType : std::uint8_t
  */
 struct BoltValue
 {
-	BoltType type;                        // type of value stored
+	BoltType type;      // type of value stored
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
-    u8 padding[2];
+    s64 size = 0;       // size it would take to encode this baby on the buffer in bytes
+    u8 padding[3];
 
     union 
     {
@@ -162,8 +159,8 @@ struct BoltValue
         {
             union 
             {
-                size_t offset;  // used for encoding 
-                u8* ptr;          // used for decoding
+                size_t offset;      // used for encoding 
+                u8* ptr;            // used for decoding
             };
             bool is_decoded;
             size_t size;   
@@ -207,6 +204,7 @@ struct BoltValue
     {
         type = BoltType::Bool;
         bool_val = b;
+        size = 1;
     } // end bool cntr
 
     
@@ -217,6 +215,12 @@ struct BoltValue
     {
         type = BoltType::Int;
         int_val = i;
+
+        if (i >= -16 && i <= 127) size = 1;
+        else if (i >= INT8_MIN && i <= INT8_MAX) size = 2;
+        else if (i >= INT16_MIN && i <= INT16_MAX) size = 3;
+        else if (i >= INT32_MIN && i <= INT32_MAX) size = 5;
+        else size = 9;
     } // end int cntr
 
     
@@ -227,6 +231,12 @@ struct BoltValue
     {
         type = BoltType::Int;
         int_val = i;
+
+        if (i >= -16 && i <= 127) size = 1;
+        else if (i >= INT8_MIN && i <= INT8_MAX) size = 2;
+        else if (i >= INT16_MIN && i <= INT16_MAX) size = 3;
+        else if (i >= INT32_MIN && i <= INT32_MAX) size = 5;
+        else size = 9;
     } // end int cntr
 
     
@@ -237,6 +247,7 @@ struct BoltValue
     {
         type = BoltType::Float;
         float_val = d;
+        size = 9;
     } // end double cntr
 
     
@@ -248,6 +259,11 @@ struct BoltValue
         type = BoltType::String;
         str_val.str = str;
         str_val.length = strlen(str);
+
+        if (str_val.length < 16) size = str_val.length + 1;
+        else if (str_val.length < 255) size = str_val.length + 2;
+        else if (str_val.length < 65536) size = str_val.length + 3;
+        else size = str_val.length + 5;
     } // end char* cntr
 
     
@@ -259,9 +275,13 @@ struct BoltValue
         type = BoltType::String;
         str_val.str = str.data();
         str_val.length = str.size();
+
+        if (str_val.length < 16) size = str_val.length + 1;
+        else if (str_val.length < 255) size = str_val.length + 2;
+        else if (str_val.length < 65536) size = str_val.length + 3;
+        else size = str_val.length + 5;
     } // end string cntr
 
-    
     /**
 	 * @brief a constructor for neo4j map types
      */
@@ -280,6 +300,8 @@ struct BoltValue
         auto* value = pool->Get(map_val.value_offset);
         key[0] = BoltValue(v.first);
         value[0] = v.second;
+
+        size = value[0].size + key[0].size;
     } // end pair cntr
 
     
@@ -303,6 +325,7 @@ struct BoltValue
         for (auto &v : init)
         {
             *(pool->Get(list_val.offset + i)) = v;
+            size += v.size;
             i++;
         } // end for
     } // end constructor
@@ -333,6 +356,8 @@ struct BoltValue
 
             *key = BoltValue(list.first);
             *value = list.second;
+
+            size += (key[0].size + value[0].size);
         } // end for 
     } // end initalizer
 
@@ -361,6 +386,7 @@ struct BoltValue
         {
             auto* fields = pool->Get(struct_val.offset + i++);
             *fields = k;
+            size += k.size;
         } // end k
     } // end BoltValue
 
@@ -683,7 +709,7 @@ struct BoltValue
      * 
      * @param size the size of the list
      */
-    static BoltValue Make_List()
+    static BoltValue Make_List(const size_t size = 0)
     {
         BoltValue v;
         v.type = BoltType::List;
@@ -692,7 +718,7 @@ struct BoltValue
         v.list_val.is_decoded = false;
         v.list_val.size = 0;
         v.list_val.ptr = nullptr;   // not decoded
-        v.list_val.offset = v.pool->Get_Last_Offset(); 
+        v.list_val.offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset(); 
         return v;
     } // end Make_List
 
@@ -716,8 +742,10 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief factory for maps
+     * 
+     * @param size of the map to pre-allocate (defaults to 0) if using slow insert way
      */
-    static BoltValue Make_Map()
+    static BoltValue Make_Map(const size_t size = 0)
     {
         BoltValue v;
         v.type = BoltType::Map;
@@ -725,7 +753,7 @@ struct BoltValue
         v.map_val.is_decoded = false;
         v.map_val.ptr = nullptr;
         v.map_val.size = 0;
-        v.map_val.key_offset = v.pool->Get_Last_Offset();
+        v.map_val.key_offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset();
         v.map_val.value_offset = v.map_val.key_offset;
         return v;
     } // end Make_List
@@ -752,14 +780,17 @@ struct BoltValue
     //===============================================================================|
     /**
      * @brief factor for structs with preset values
+     * 
+     * @param tag id for structure type
+     * @param size of pre allocated lists, defaults to 0 if not
      */
-    static BoltValue Make_Struct(const u8 tag)
+    static BoltValue Make_Struct(const u8 tag, const size_t size = 0)
     {
         BoltValue v;
         v.type = BoltType::Struct;
         v.pool = GetBoltPool<BoltValue>();
         v.struct_val.size = 0;
-		v.struct_val.offset = v.pool->Get_Last_Offset();
+		v.struct_val.offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset();
         v.struct_val.ptr = nullptr;
         v.struct_val.is_decoded = false;
         v.struct_val.tag = tag;

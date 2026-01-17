@@ -1,14 +1,10 @@
 /**
- * @file connection.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
- * 
- * @brief Defintion of BoltEncoder object
  * 
  * @version 1.0
  * @date 13th of April 2025, Sunday.
  * 
- * @copyright Copyright (c) 2025
- * 
+ * @copyright Copyright (c) 2025 - 2026.
  */
 #pragma once
 
@@ -36,7 +32,12 @@
 //          CLASS
 //===============================================================================|
 /**
- * @brief a helper bolt message encoder class.
+ * @brief Encoder is more of stream packer according to bolt protocol specs. The
+ *  class packs values passed into its only interface Encode() using PackStream v1
+ *  specifications. Thus the class specializes in encoding, Nulls, Ints, Floats, 
+ *  Bytes [], Chars/Strings, Bools - as wrappers and pointers around standard C++
+ *  objects, and Maps/Dictionary, Lists, Structs, and Messages as containers to
+ *  those primitive types.
  */
 class BoltEncoder
 {
@@ -44,11 +45,6 @@ public:
 
     explicit BoltEncoder(BoltBuf &b) 
         : buf(b) {}
-
-    BoltEncoder(const BoltEncoder&) = default;
-	BoltEncoder& operator=(const BoltEncoder&) = default;
-    BoltEncoder(BoltEncoder&&) noexcept = default;
-	BoltEncoder& operator=(BoltEncoder&&) noexcept = default;
 
     /**
      * @brief encode's objects according to bolt protocol PackStream
@@ -58,8 +54,11 @@ public:
      * @param len optional: if sizeof value can't be inferred.
      */
     template <typename T>
-    inline void Encode(const T& val, const size_t len = 0) 
+    inline int Encode(const T& val, const size_t len = 0) 
     {
+        if (!Has_Free(val, len))
+            return -1;
+
         if constexpr (std::is_same_v<T, std::nullptr_t>) 
         {
             Encode_Null();
@@ -127,30 +126,84 @@ public:
                 case BoltType::Struct:
                     Encode_Struct(val);
                     break;
-                } // end switch
-            } // end else if
-            else if (std::is_integral_v<T>) 
-            {
-                Encode_Int(val);
-            } // end else int
-            else if constexpr (std::is_same_v<T, double>)
-            {
-                Encode_Float(val);
-            } // end else float
-            else
-            {
-                std::cout << "Type: " << typeid(val).name() << "\n";
-            } // end else
-        } // end Encode
+            } // end switch
+        } // end else if
+        else if (std::is_integral_v<T>) 
+        {
+            Encode_Int(val);
+        } // end else int
+        else if constexpr (std::is_same_v<T, double>)
+        {
+            Encode_Float(val);
+        } // end else float
+        else
+        {
+            std::cout << "Type: " << typeid(val).name() << "\n";
+        } // end else
+
+        return 0;
+    } // end Encode
 
 private:
 
     BoltBuf &buf;
     
+
     /**
-     * @brief place holder
+     * @brief mirrors Encode, with the difference that this is meant to be called only once
+     *  per encode and makes sure we have enough space to write to buffer. If space is enough
+     *  simply returns alas, attempts to grow buffer.
+     * 
+     * @return true is space is available or false if buffer can't grow or val cant be encoded.
      */
-    inline void dummy() {}
+    template <typename T>
+    inline bool Has_Free(const T& val, const size_t len = 0)
+    {
+        size_t size = 0;
+        if constexpr (std::is_same_v<T, std::nullptr_t>) size = 1;
+        else if constexpr (std::is_same_v<T, bool>) size = 1;
+        else if constexpr (std::is_same_v<T, std::string>)
+        {
+            size = val.length();
+            if (size < 16) size += 1;
+            else if (size < 256) size += 2;
+            else if (size < 65536) size += 3;
+            else size += 5;
+        } // end else string
+        else if constexpr (std::is_same_v<T, const char*>)
+        {
+            size = len;
+            if (size < 16) size += 1;
+            else if (size < 256) size += 2;
+            else if (size < 65536) size += 3;
+            else size += 5;
+        } // end else string
+        else if constexpr (std::is_same_v<T, std::vector<u8>>)
+        {
+            size = val.size();
+            if (size < 255) size += 1;
+            else if (size < 65536) size += 3;
+            else size += 5;
+        } // end else vector
+        else if constexpr (std::is_same_v<T, BoltMessage>) size = val.msg.size + 4;
+        else if constexpr (std::is_same_v<T, BoltValue>) size = val.size;
+        else if (std::is_integral_v<T>)
+        {
+            if (val >= -16 && val <= 127) size = 1;
+            else if (val >= INT8_MIN && val <= INT8_MAX) size = 2;
+            else if (val >= INT16_MIN && val <= INT16_MAX) size = 3;
+            else if (val >= INT32_MIN && val <= INT32_MAX) size = 5;
+            else size = 9;
+        } // end else int
+        else if constexpr (std::is_same_v<T, double>) size = 9;
+        else return false;
+
+        // attempt to grow if 2x, if size is not enough
+        if (size >= buf.Writable_Size())
+            if (buf.Grow(buf.Capacity() << 1) < 0) return false;
+      
+        return true;
+    } // end Has_Free
 
 
     /**

@@ -1,5 +1,4 @@
 /**
- * @file main.cpp
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
  * @brief stress testing bolt encoder and decoder speeds
@@ -29,27 +28,29 @@ static std::atomic<int> records{ 0 };
 //===============================================================================|
 void QueryCallback(int rc, void*) 
 {
-    if (rc == 0)
-        completed.fetch_add(1, std::memory_order_relaxed);
+    /*static int c = 1;
+    std::cout << "called run." << c++ << std::endl;*/
 } // end QueryCallback
 
-void FetchCallbackFn(BoltMessage* msg, int status, void*) 
+void FetchCallbackFn(BoltResult& res) 
 {
-    if (msg)
-    {
-        //std::cout << msg->ToString() << "\n";
-        records.fetch_add(1, std::memory_order_relaxed);
-    }
+   /* std::cout << "=======================\n";
+    for (auto& v : res.records)
+            Print("Records: %s", v.ToString().c_str());
+    std::cout << "=======================\n";*/
+
+    records.fetch_add(static_cast<int>(res.records.size()), std::memory_order_relaxed);
+    completed.fetch_add(1, std::memory_order_relaxed);
 } // end FetchCallbackFn
 
 
 int main() 
 {
     constexpr int QUERY_COUNT = 1000;
-    NeoCellPool pool(4, BoltValue({
+    NeoCellPool pool(8, BoltValue({
             mp("host", "localhost:7687"),
             mp("username", "neo4j"),
-            mp("password", "tobby@melona"),
+            mp("password", ""),
             mp("encrypted", "false")
         }));
     pool.Start();
@@ -57,23 +58,17 @@ int main()
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) {
-        NeoCellWorker* cell = pool.Acquire();
+        NeoCell* cell = pool.Acquire();
 
         {
             CellCommand cmd;
             cmd.type = CellCmdType::Run;
-            cmd.cypher = "UNWIND range(1,100) AS n RETURN n";
+            cmd.cypher = "UNWIND range(1,10) AS n RETURN n";
             cmd.params = BoltValue::Make_Map();
             cmd.extras = BoltValue::Make_Map();
-            cmd.cb = QueryCallback;
-            cell->Enqueue(std::move(cmd));
-        }
-
-        {
-            CellCommand cmd;
-            cmd.type = CellCmdType::Fetch;
-            cmd.fetch_cb = FetchCallbackFn;
-            cell->Enqueue(std::move(cmd));
+            cmd.cb = FetchCallbackFn;
+            cmd.ecb = QueryCallback;
+            cell->Enqueue_Request(std::move(cmd));
         }
     }
 

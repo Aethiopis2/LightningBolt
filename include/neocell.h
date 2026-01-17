@@ -10,9 +10,9 @@
 #pragma once
 
 
- //===============================================================================|
- //          INCLUDES
- //===============================================================================|
+//===============================================================================|
+//          INCLUDES
+//===============================================================================|
 #include "connection/neoconnection.h"
 
 
@@ -21,15 +21,39 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
-using ResultCallback = void(*)(int result, void* user);
-
-struct RequestParams
+/**
+ * @brief command types for my cellular model
+ */
+enum class CellCmdType
 {
-    std::string cypher;
-    BoltValue params;
-    BoltValue extras;
+    Run,
+    Begin,
+    Commit,
+    Rollback,
+    Pull,
+    Discard,
+    Reset,
+    Logoff,
+};
 
-    ResultCallback results_func = nullptr;
+
+/**
+ * @brief command types and their corresponding parameters understood by the cell.
+ *  The structure is meant to capture the layout of different API's offered by
+ *  the connection object.
+ */
+struct CellCommand
+{
+    CellCmdType type;       // the command types, see enum above
+
+    std::string cypher;     // the query string in relation to run command
+    BoltValue params = BoltValue::Make_Map();   // params for run, begin, commit and rollback
+    BoltValue extras = BoltValue::Make_Map();   // params for run
+    BoltValue Routes;       // list of routes for route
+    int n = -1;             // size for fetching
+
+    ResultCallback cb = nullptr;    // a callback for async procs ideal for web apps.
+    EncodeCallback ecb = nullptr;   // a callback to encoder
 };
 
 
@@ -45,36 +69,37 @@ public:
     ~NeoCell();
 
     int Start(const int id = 1);
-	int Enqueue_Request(RequestParams&& req);
+    int Enqueue_Request(CellCommand&& cmd);
+    int Fetch(BoltResult& result);
 
     void Stop();
-    void Set_Running(const bool state);
-
-	bool Is_Running() const;
     std::string Get_Last_Error() const;
 
 private:
 
-    std::atomic<bool> running;          // thread loop controller
-    std::atomic<bool> is_shutting_down; // signals if process is shutting down
-	std::atomic<int> qcount;            // tracks the active queries in progress, and 
-        // acts as a signal controller to read/write threads and close processes
+    int read_ret;           // store's return codes from read thread
+    int write_ret;          // return values from the corresponding write
 
-    std::thread write_thread;       // writer thread id
-    std::thread read_thread;        // reader therad id
-	NeoConnection connection;       // a connection instance; either standalone or routed
-	LockFreeQueue<RequestParams> request_queue;   // request queue for the cell
+    std::atomic<bool> running;  // thread loop controller
+    std::atomic<bool> esleep;   // when true encoder thread is sleeping.
+    std::atomic<bool> dsleep;   // when true it as well means decoder thread is sleeping
+    std::atomic<bool> twait;    // decoder task wait, when true thread should wait
+    std::thread encoder_thread; // writer thread id
+    std::thread decoder_thread; // reader therad id
+
+	NeoConnection connection;           // a connection instance; either standalone or routed
+	LockFreeQueue<CellCommand> equeue;  // request queue for the cell
     
-	void Write_Loop();
-	void Read_Loop();
-    void Add_QCount();
-    void Sub_QCount();
-	void Sleep_Thread();
-    void Wait_Thread();
+	void Encoder_Loop();
+	void Decoder_Loop();
+    void EWake();
+    void DWake();
+    void Sleep(std::atomic<bool>& s);
+    void Wait_Task();
+    void Set_Running(const bool state);
 
-    int Get_QCount() const;
+    bool Is_Running() const;
 
-    ResultCallback results_function;
     //struct RouteTable
     //{
     //    std::string writer;     // address to leader in a cluster

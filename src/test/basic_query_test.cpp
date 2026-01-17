@@ -35,7 +35,7 @@ struct Test
         "UNWIND RANGE(1, 1000) AS r RETURN r",
         "MATCH (n) RETURN n LIMIT 10        "
     };
-    const int rounds[NUM_TESTS] = { 10, 100, 100, 1000 };
+    const int rounds[NUM_TESTS] = { 10, 1000, 100, 100 };
     const char* spaces[NUM_TESTS] = {
         "                            ",
         "                            ",
@@ -56,8 +56,8 @@ void Test_Record_Fetch()
         NeoCell con(BoltValue({
             mp("host", "localhost:7687"),
             mp("username", "neo4j"),
-            mp("password", "tobby@melona"),
-            mp("encrypted", "false")
+            mp("password", ""),
+            mp("tls", "false")
             }));
 
         if (int ret; (ret = con.Start()) < 0)
@@ -73,24 +73,25 @@ void Test_Record_Fetch()
 
         for (size_t k = 0; k < NUM_TESTS; k++)
         {
+            /*std::chrono::_V2::system_clock::time_point start;*/
             for (u64 j = 0; j < test.rounds[k]; j++)
             {
                 auto start = std::chrono::high_resolution_clock::now();
-                con.Run(test.cypher[k]);
+                con.Enqueue_Request({ CellCmdType::Run, test.cypher[k] });
 
-                BoltMessage out;
-                int ret;
-
-                while ((ret = con.Fetch(out)) > 0);
-                    //Print("Records: %s", out.ToString().c_str());
-
-                //Print("Summary: %s", out.ToString().c_str());
-
+                BoltResult out;
+                int ret = con.Fetch(out);
                 if (ret < 0)
                 {
-                    Dump_App_Err(con.Get_Last_Error().c_str());
+                    Fatal(con.Get_Last_Error().c_str());
                     break;
                 } // end if
+
+                
+                /*Print("Fields: %s", out.fields.ToString().c_str());
+                for (auto& v : out.records)
+                    Print("Records: %s", v.ToString().c_str());
+                Print("Summary: %s", out.summary.ToString().c_str());*/
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());

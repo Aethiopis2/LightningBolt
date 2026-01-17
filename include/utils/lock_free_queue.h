@@ -39,7 +39,6 @@ public:
             slot.full.store(false, std::memory_order_relaxed);
     } // end Constructor
 
-
     bool Enqueue(const T& item)
     {
         size_t pos = tail.load(std::memory_order_relaxed);
@@ -100,12 +99,13 @@ public:
     /**
 	 * @brief access item at given index without dequeuing it
      */
-    std::optional<T> operator[](const size_t index)
+    std::optional<std::reference_wrapper<T>> operator[](const size_t index)
     {
-        if (!buffer[index].full.load(std::memory_order_acquire))
+        size_t pos = head.load(std::memory_order_relaxed) + index;
+        if (!buffer[pos].full.load(std::memory_order_acquire))
             return std:: nullopt;
 
-        return buffer[index].value;
+        return std::ref(buffer[pos].value);
     } // end operator[]
 
 
