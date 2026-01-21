@@ -34,9 +34,9 @@ void QueryCallback(int rc, void*)
 
 void FetchCallbackFn(BoltResult& res) 
 {
-   /* std::cout << "=======================\n";
+    /*std::cout << "=======================\n";
     for (auto& v : res.records)
-            Print("Records: %s", v.ToString().c_str());
+            Utils::Print("Records: %s", v.ToString().c_str());
     std::cout << "=======================\n";*/
 
     records.fetch_add(static_cast<int>(res.records.size()), std::memory_order_relaxed);
@@ -47,13 +47,11 @@ void FetchCallbackFn(BoltResult& res)
 int main() 
 {
     constexpr int QUERY_COUNT = 1000;
-    NeoCellPool pool(8, BoltValue({
-            mp("host", "localhost:7687"),
-            mp("username", "neo4j"),
-            mp("password", ""),
-            mp("encrypted", "false")
-        }));
-    pool.Start();
+	std::string url = "bolt://localhost:7687";
+    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
+    
+	NeoCellPool pool(4, url, &basic);
+    pool.Start(true);
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -63,7 +61,7 @@ int main()
         {
             CellCommand cmd;
             cmd.type = CellCmdType::Run;
-            cmd.cypher = "UNWIND range(1,10) AS n RETURN n";
+            cmd.cypher = "UNWIND range(1,100) AS n RETURN n";
             cmd.params = BoltValue::Make_Map();
             cmd.extras = BoltValue::Make_Map();
             cmd.cb = FetchCallbackFn;

@@ -1,13 +1,9 @@
 /**
- * @file utils.cpp
  * @author Rediet Worku, Dr. aka Aethiopis II ben Zahab (PanaceaSolutionsEth@gmail.com)
  * 
- * @brief contains defintion for utils.h file function prototypes
  * @version 1.4
- * @date 2024-03-03, Sunday
- * 
- * @copyright Copyright (c) 2024
- * 
+ * @date created 3rd of March, Sunday
+ * @date updated 18th of January 2026, Sunday
  */
 
 
@@ -59,7 +55,7 @@ const std::string CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
  * 
  * @return int a 0 on success, a -1 if file open failed.
  */
-int Init_Configuration(const std::string &filename, SYS_CONFIG &sys_config)
+int Utils::Init_Configuration(const std::string &filename, SYS_CONFIG &sys_config)
 {
     std::string sz_first, sz_second;
     std::ifstream config_file{filename.c_str()};
@@ -78,7 +74,7 @@ int Init_Configuration(const std::string &filename, SYS_CONFIG &sys_config)
     return 0;
 } // end Init_Configuration
 
-//=====================================================================================|
+
 /**
  * @brief Splits a string using the sz_token provided and returns them as vector of strings
  * 
@@ -87,7 +83,7 @@ int Init_Configuration(const std::string &filename, SYS_CONFIG &sys_config)
  * 
  * @return std::vector<std::string> a vector of strings split is returned
  */
-std::vector<std::string> Split_String(const std::string &str, const char tokken)
+std::vector<std::string> Utils::Split_String(const std::string &str, const char tokken)
 {
     std::string s;      // get's the split one at a time
     std::vector<std::string> vec;
@@ -99,7 +95,7 @@ std::vector<std::string> Split_String(const std::string &str, const char tokken)
     return vec;
 } // end Split_String
 
-//=====================================================================================|
+
 /**
  * @brief Prints the contents of buffer in hex notation along side it's ASCII form much 
  *  like hex viewer's do it.
@@ -107,12 +103,7 @@ std::vector<std::string> Split_String(const std::string &str, const char tokken)
  * @param buf the information to dump as hex and char arrary treated as a char array. 
  * @param len the length of the buffer above
  */
-#include <iostream>
-#include <iomanip>
-#include <cstdint>
-#include <cctype>
-
-void Dump_Hex(const char* buf, size_t len)
+void Utils::Dump_Hex(const char* buf, size_t len)
 {
     const size_t columns = 16;   // 16 bytes per row
     size_t i, j;
@@ -163,17 +154,17 @@ void Dump_Hex(const char* buf, size_t len)
         std::cout << "\n";
     }
 
-    std::cout << "\n";
+    std::cout << std::endl;
 } // end Dump_Hex
 
-//=====================================================================================|
+
 /**
  * @brief Formats the date and time for displaying on the screen; so that my applications
  *  could have a standard look and feel when run through the console.
  * 
  * @return std::string a formatted datetime
  */
-std::string Get_Formatted_String(const std::string &app_name)
+std::string Utils::Get_Formatted_String(const std::string &app_name)
 {
     time_t curr_time;
     char buf[MAXPATH];
@@ -186,7 +177,7 @@ std::string Get_Formatted_String(const std::string &app_name)
     return buf;
 } // end display_time
 
-//=====================================================================================|
+
 /**
  * @brief Neatly replaces the string patt from str using the string replace. It basically
  *  splits the string in half and insert's the replace string in between.
@@ -196,7 +187,7 @@ std::string Get_Formatted_String(const std::string &app_name)
  * @param replace the replacement string
  * 
  */
-void Replace_String(std::string &str, const std::string &patt, const std::string &replace)
+void Utils::Replace_String(std::string &str, const std::string &patt, const std::string &replace)
 {
     size_t pos;
     if (( pos = str.find(patt)) != std::string::npos)
@@ -206,7 +197,7 @@ void Replace_String(std::string &str, const std::string &patt, const std::string
     } // end find
 } // end Replace_String
 
-//=====================================================================================|
+
 /**
  * @brief Format's the numerical value with comma's. Useful in financial apps where its
  *  common to format numerics in such manner.
@@ -215,7 +206,7 @@ void Replace_String(std::string &str, const std::string &patt, const std::string
  * 
  * @return std::string a formatted numerical string 
  */
-std::string Format_Numerics(const double num)
+std::string Utils::Format_Numerics(const double num)
 {
     std::ostringstream ostream;
     ostream << std::setprecision(2) << std::fixed << num;
@@ -241,7 +232,7 @@ std::string Format_Numerics(const double num)
     return s;
 } // end Format_Numerics
 
-//=====================================================================================|
+
 /**
  * @brief Determines if the string s is a number or not.
  * 
@@ -250,19 +241,19 @@ std::string Format_Numerics(const double num)
  * @return true 
  * @return false 
  */
-bool Is_Number(const std::string &s)
+bool Utils::Is_Number(const std::string &s)
 {
     return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) 
         { return !isdigit(c); }) == s.end();
 } // end Is_Number
 
-//=====================================================================================|
+
 /**
  * @brief Prints a formatted stylized string message to console (Good ol' C style)
  * 
  * @param s the message/string to print on console
  */
-void Print(const char *s, ...)
+void Utils::Print(const char *s, ...)
 {
     va_list arg_list;
     char buf[MAXLINE+1];
@@ -274,14 +265,14 @@ void Print(const char *s, ...)
     va_end(arg_list);
 } // end Print
 
-//=====================================================================================|
+
 /**
  * @brief Formats the date and time for displaying on the screen; so that my applications
  *  could have a standard look and feel when run through the console.
  * 
  * @return std::string a formatted datetime
  */
-std::string Console_Out(const std::string app_name)
+std::string Utils::Console_Out(const std::string app_name)
 {
     time_t curr_time;
     char buf[MAXPATH];
@@ -294,7 +285,7 @@ std::string Console_Out(const std::string app_name)
     return buf;
 } // end display_time
 
-//=====================================================================================|
+
 /**
  * @brief Generates a uuid for use in unique identification. The algorithim is very code
  *  and I did not want to use boost library just for this. 
@@ -302,7 +293,7 @@ std::string Console_Out(const std::string app_name)
  * 
  * @return std::string a uuid that should be unique
  */
-std::string Generate_UUID()
+std::string Utils::Generate_UUID()
 {
     std::string uuid = std::string(36, ' ');
     int rnd = 0;
@@ -326,25 +317,25 @@ std::string Generate_UUID()
     return uuid;
 } // end Generate_UUID
 
-//=====================================================================================|
+
 /**
  * @brief Prints title; i.e. company name and website info among other things.
  * 
  */
-void Print_Title(const std::string coname, const std::string url)
+void Utils::Print_Title(const std::string coname, const std::string url)
 {
     std::cout << "\n\t     \033[36m" << coname << "\033[37m\n"
         << "\t\t\033[34m" << url << "\033[037m\n" << std::endl;
 } // end Print_Ttile
 
-//=====================================================================================|
+
 /**
  * @brief A kooked swapping algorthim that is pretty predicatable, the same re-application
- *  results in the orginal value.
+ *  results in the orginal value. Fun expriment.
  * 
  * @param num the number to swap
  */
-void Swap(u64 *num)
+void Utils::Swap(u64 *num)
 {
     char *ptr = (char *)num;
     char swap = ptr[5];
@@ -360,32 +351,42 @@ void Swap(u64 *num)
     ptr[4] = swap; 
 } // end Swap
 
-//=====================================================================================|
+
 /**
- * @brief converts a everything alphabetic in the string str to lower case. The function
- *  performs inplace conversion
+ * @brief converts a everything alphabetic in the string str to lower case and returns
+ *  the converted string
  * 
- * @param str the string to convert and store
- * @param len length of the string
+ * @param str the string to convert
+ * 
+ * @return small case new string
  */
-void String_ToLower(char* str, const size_t len)
+std::string Utils::String_ToLower(const std::string& str)
 {
+    std::string small_str = "";
+
     // loop and convert each char
-    for (size_t i = 0; i < len; i++)
-        str[i] = std::tolower((unsigned char)str[i]);
+    for (auto& s : str)
+        small_str += std::tolower((unsigned char)s);
+
+    return small_str;
 } // end String_ToLower
 
-//=====================================================================================|
+
 /**
- * @brief converts a everything alphabetic in the string str to upper case. The function
- *  performs inplace conversion like its buddy above
- *
- * @param str the string to convert and store
- * @param len length of the string
+ * @brief converts a everything alphabetic in the string str to upper case and returns
+ *  the converted string
+ * 
+ * @param str the string to convert
+ * 
+ * @return upper case new string
  */
-void String_ToUpper(char* str, const size_t len)
+std::string Utils::String_ToUpper(const std::string& str)
 {
+    std::string up_str = "";
+
     // loop and convert each char
-    for (size_t i = 0; i < len; i++)
-        str[i] = toupper((unsigned char)str[i]);
+    for (auto& s : str)
+        up_str += std::toupper((unsigned char)s);
+
+    return up_str;
 } // end String_ToLower

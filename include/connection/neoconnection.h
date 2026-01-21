@@ -3,9 +3,7 @@
  * 
  * @version 1.0
  * @date created 9th of April 2025, Wednesday
- * @date updated 12th of Decemeber 2025, Friday
- * 
- * @copyright Copyright (c) 2025
+ * @date updated 18th of January 2026, Sunday
  */
 #pragma once
 
@@ -85,7 +83,7 @@ class NeoConnection : public TcpClient
 
 public: 
 
-    explicit NeoConnection(BoltValue params);
+    NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
     
     int Init(const int cli_id = -1);
@@ -122,6 +120,10 @@ public:
 
 private: 
     
+    // connection paramters; kept inside driver
+    BoltValue* pauth;       // authentication token
+    BoltValue* pextras;     // extra conneection parameters
+
     int client_id;          // connection identifier
 	int tran_count;		    // number of transactions executed; simulates nesting
 	bool is_open;           // connection flag
@@ -135,7 +137,6 @@ private:
     // storage buffers
     BoltBuf read_buf;
     BoltBuf write_buf;
-    BoltValue conn_params;     // pointer to connection parameters
 
     BoltEncoder encoder;
     BoltDecoder decoder;

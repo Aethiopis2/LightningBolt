@@ -3,6 +3,250 @@ A high-speed neo4j C++ driver over bolt protocol
 
 
 # Internals
+## TcpClient
+
+### Minimal High-Performance TCP / TLS Client
+
+A minimal, low-level **TCP / TLS client abstraction** designed for performance-critical systems.
+
+This class provides the *bare bones* required to establish TCP or TLS connections, send and receive data, and integrate cleanly with `poll()` / event-driven architectures — **without virtual dispatch, hidden allocations, or framework overhead**.
+
+It is intended as an infrastructure building block (e.g. database drivers, protocol engines, async runtimes), not a batteries-included networking framework.
+
+---
+
+### Design Goals
+
+* **Zero abstraction tax** in hot paths
+* **Explicit lifecycle control** (connect, handshake, shutdown)
+* **No virtual send/recv overhead**
+* **Works with `poll()` / epoll-style event loops**
+* **Optional TLS (OpenSSL)** with thread-safe global initialization
+* **Blocking and non-blocking I/O** with identical interface
+
+This class intentionally avoids:
+
+* RAII wrappers around sockets or SSL
+* Background threads
+* Automatic retries or buffering
+* Implicit state machines
+
+Higher layers are expected to orchestrate behavior.
+
+---
+
+### Key Features
+
+#### 1. Function-Pointer I/O Dispatch
+
+Instead of virtual methods, `TcpClient` uses **member function pointers**:
+
+* `Send()` and `Recv()` dispatch directly to:
+
+  * TCP blocking
+  * TCP non-blocking
+  * TLS (`SSL_write` / `SSL_read`)
+
+This avoids vtable lookups and keeps the hot path predictable.
+
+---
+
+#### 2. Optional TLS (OpenSSL)
+
+TLS support is optional and explicit:
+
+* TLS is enabled via constructor or `Enable_SSL()` (pre-connect)
+* Handshake is performed after TCP connect
+* All OpenSSL global state is initialized **once per process** using `std::call_once`
+
+```cpp
+static std::once_flag ssl_init_once;
+std::call_once(ssl_init_once, []() noexcept {
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+});
+```
+
+This guarantees:
+
+* Thread-safe initialization
+* Zero overhead after first call
+
+---
+
+#### 3. `poll()`-Friendly API
+
+The client is designed to integrate cleanly with event loops:
+
+```cpp
+pollfd pfd = client.Get_Pollfd();
+```
+
+* Only `POLLIN` is requested
+* Write readiness is controlled by the caller
+* No internal blocking loops
+
+This matches architectures where reads are kernel-driven and writes are demand-driven.
+
+---
+
+#### 4. Blocking and Non-Blocking Modes
+
+The socket can be switched to non-blocking mode at runtime:
+
+```cpp
+client.Set_NonBlock();
+```
+
+Behavioral differences are handled internally by switching function pointers.
+
+Return values distinguish:
+
+* Success
+* Try-again (`EAGAIN`, `EWOULDBLOCK`, `SSL_ERROR_WANT_*`)
+* Peer closed
+* Fatal error
+
+No exceptions are used.
+
+---
+
+### Public Interface Overview
+
+```cpp
+class TcpClient
+{
+public:
+    TcpClient();
+    TcpClient(const std::string& host,
+              const std::string& port,
+              bool ssl = false);
+
+    virtual ~TcpClient();
+
+    virtual bool Is_Closed() const = 0;
+
+    int Connect();
+    int Send(const void* buf, size_t len);
+    int Recv(void* buf, size_t len);
+
+    pollfd Get_Pollfd() const;
+    int Get_Socket() const;
+
+    int Set_NonBlock();
+    void Disconnect();
+
+    void Enable_SSL();
+};
+```
+
+---
+
+### Typical Usage
+
+#### TCP (Blocking)
+
+```cpp
+TcpClient client("localhost", "7687");
+if (client.Connect() == TCP_SUCCESS)
+{
+    client.Send(data, size);
+    client.Recv(buf, sizeof(buf));
+}
+```
+
+---
+
+#### TCP (Non-Blocking + poll)
+
+```cpp
+client.Set_NonBlock();
+
+pollfd pfd = client.Get_Pollfd();
+poll(&pfd, 1, timeout);
+
+if (pfd.revents & POLLIN)
+    client.Recv(buf, sizeof(buf));
+```
+
+---
+
+#### TLS
+
+```cpp
+TcpClient client("db.example.com", "7687", true);
+client.Connect();
+```
+
+TLS handshake occurs immediately after TCP connect.
+
+---
+
+### Error Model
+
+All I/O functions return `int`:
+
+| Return value       | Meaning                           |
+| ------------------ | --------------------------------- |
+| > 0                | Bytes transferred                 |
+| `TCP_TRYAGAIN`     | Retry later (`EAGAIN` / SSL WANT) |
+| `TCP_ERROR_CLOSED` | Peer closed connection            |
+| `TCP_ERROR`        | Fatal TCP error                   |
+| `TCP_ERROR_SSL`    | Fatal TLS error                   |
+
+The class does **not** retry automatically.
+
+---
+
+### Threading Model
+
+* The class itself is **not synchronized**
+* One `TcpClient` instance should be owned by one thread at a time
+* OpenSSL global initialization is thread-safe
+
+This design avoids hidden locks in the hot path.
+
+---
+
+### Non-Goals
+
+This class intentionally does **not** provide:
+
+* Async futures / promises
+* Internal buffers
+* Automatic reconnects
+* Protocol framing
+* Connection pooling
+
+Those concerns belong in higher layers.
+
+---
+
+### Intended Use Cases
+
+* High-performance database drivers (e.g. Bolt / Neo4j)
+* Binary protocol engines
+* Event-driven network clients
+* Systems where latency and predictability matter more than convenience
+
+---
+
+### Philosophy
+
+> *Make the fast path obvious, explicit, and cheap.*
+
+`TcpClient` exposes exactly what the OS and TLS stack provide — no more, no less — and lets higher layers build meaning on top.
+
+If you need a framework, use one.
+If you need control, this is the right layer.
+
+---
+
+### License
+
+Use freely. Attribution appreciated.
+
 ## BoltBuf: Adaptive High-Performance I/O Buffer
 
 `BoltBuf` is a zero-copy, hardware-aligned buffer used per connection in LightningBolt to manage reads and writes. It is tuned for:

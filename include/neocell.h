@@ -3,9 +3,7 @@
  *
  * @version 1.0
  * @date created 10th of December 2025, Wednesday
- * @date updated 12th of Decemeber 2025, Friday
- *
- * @copyright Copyright (c) 2025
+ * @date updated 18th of January 2026, Sunday
  */
 #pragma once
 
@@ -57,6 +55,18 @@ struct CellCommand
 };
 
 
+namespace Auth
+{
+    inline BoltValue Basic(const std::string& user, const std::string& password)
+    {
+        return BoltValue({
+            mp("scheme", "basic"),
+            mp("principal", user.c_str()),
+            mp("credentials", password.c_str())
+            });
+    } // end Basic
+} // end AuthToken
+
 
 //===============================================================================|
 //          CLASS
@@ -65,7 +75,7 @@ class NeoCell
 {
 public:
 
-    NeoCell(BoltValue params);
+    NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoCell();
 
     int Start(const int id = 1);
@@ -99,15 +109,4 @@ private:
     void Set_Running(const bool state);
 
     bool Is_Running() const;
-
-    //struct RouteTable
-    //{
-    //    std::string writer;     // address to leader in a cluster
-    //    std::vector<std::string> readers;   // bunch of replica + followers in a cluster
-    //    std::vector<std::string> routes;    // redundant from our perpective but can mask out replicas
-    //    std::string database;               // which database is in the cluster
-    //    s64 ttl;                // time to live, route refresh rate as defined by server
-    //};
-
-    //RouteTable route_table;     // instance
 };

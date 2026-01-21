@@ -1,13 +1,9 @@
 /**
- * @file basics.h
  * @author Rediet Worku aka Aethiops II ben Zahab (aethiopis2rises@gmail.com)
  * 
- * @brief contains some basic C/C++ and OS related includes and macros
  * @version 1.2
- * @date 2023-12-01
- * 
- * @copyright Copyright (c) 2023
- * 
+ * @date created 1st of December 2023, Friday
+ * @date updated 18th of January 2026, Sunday
  */
 #ifndef REDBASICS_H
 #define REDBASICS_H
@@ -26,6 +22,8 @@
 //=====================================================================================|
 #include <iostream>             // C++ headers
 #include <iomanip>
+#include <cstdint>
+#include <cctype>
 #include <string>
 #include <fstream>
 #include <sstream>
@@ -44,14 +42,10 @@
 #include <functional>
 #include <atomic>
 #include <cstddef>
-#include <chrono>
 #include <condition_variable>
 #include <optional>
 #include <bit>
 #include <span>
-
-
-
 
 
 #include <sys/types.h>          // C headers

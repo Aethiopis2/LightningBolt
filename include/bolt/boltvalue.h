@@ -753,8 +753,8 @@ struct BoltValue
         v.map_val.is_decoded = false;
         v.map_val.ptr = nullptr;
         v.map_val.size = 0;
-        v.map_val.key_offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset();
-        v.map_val.value_offset = v.map_val.key_offset;
+        v.map_val.key_offset = size > 0 ? v.pool->Alloc(size << 1) : v.pool->Get_Last_Offset();
+        v.map_val.value_offset = v.map_val.key_offset + size;
         return v;
     } // end Make_List
 
@@ -790,8 +790,8 @@ struct BoltValue
         v.type = BoltType::Struct;
         v.pool = GetBoltPool<BoltValue>();
         v.struct_val.size = 0;
-		v.struct_val.offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset();
         v.struct_val.ptr = nullptr;
+		v.struct_val.offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset();
         v.struct_val.is_decoded = false;
         v.struct_val.tag = tag;
         return v;

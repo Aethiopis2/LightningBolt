@@ -26,8 +26,9 @@
  *
  * @param con_string the connection string to connect to neo4j server
  */
-NeoCell::NeoCell(BoltValue params)
-	: connection(params), running(false), twait(true), esleep(false), dsleep(false)
+NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
+	: connection(urls, pauth, pextras), running(false), twait(true), 
+	  esleep(false), dsleep(false)
 { } // end NeoCell
 
 

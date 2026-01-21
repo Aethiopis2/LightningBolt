@@ -5,9 +5,7 @@
  * 
  * @version 1.0
  * @date created 9th of April 2025, Wednesday
- * @date updated 12th of Decemeber 2025, Friday
- * 
- * @copyright Copyright (c) 2025
+ * @date updated 18th of January 2026, Sunday
  */
 
 
@@ -43,14 +41,31 @@ static bool Grow_Buffers(BoltBuf& buf)
 /**
  * @brief constructor
  */
-NeoConnection::NeoConnection(BoltValue params)
-    :encoder(write_buf), decoder(read_buf), conn_params(std::move(params))
+NeoConnection::NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
+    : encoder(write_buf), decoder(read_buf), pauth(pauth), pextras(pextras)
 {
+    // defaults
 	client_id = -1;
 	tran_count = 0;
 	bytes_recvd = 0;
 	is_open = false;
+	ssl_enabled = false;
 	err_string = "";
+
+    // set the url
+    size_t pos = urls.find_first_of("://");
+    std::string temp{ urls };
+    if (pos != std::string::npos)
+    {
+        if (!urls.substr(0, pos - 1).compare("bolt+s"))
+            ssl_enabled = true;
+
+        temp = urls.substr(pos + 3, urls.length() - (pos + 3));
+    } // end if pos
+
+    // split into host and port part
+    std::vector<std::string> url{ Utils::Split_String(temp, ':') };
+    if (url.size() == 2) Set_Host_Address(url[0], url[1]);
 } // end NeoConnection
 
 
@@ -73,21 +88,8 @@ NeoConnection::~NeoConnection() { }
  */
 int NeoConnection::Init(const int cli_id)
 {
-    // host string itself may be split into multiple addresses using ';' char
-    //  let's split it there and successfully connect to the first address found
-    std::vector<std::string> addresses{ Split_String(conn_params["host"].ToString(), ';') };
-    for (auto& address : addresses)
-    {
-        // initalize and tcp connect
-        std::vector<std::string> creds{ Split_String(address, ':') };
-        //if (creds.size() != 2)
-			//continue;       // malformed address, skip
-
-		//Set_Host_Address(creds[0], creds[1]);
-        Set_Host_Address("localhost", "7687");
-        if (Reconnect() == 0)
-            break;
-    } // end for all addresses
+    if (int rc; (rc = Reconnect()) < 0)
+        return rc;
 
     if (!is_open)
         return -1;
@@ -680,10 +682,10 @@ int NeoConnection::Poll_Writable()
 {
     while (!write_buf.Empty())
     {
-        ssize_t n = Send(write_buf.Read_Ptr(), write_buf.Size());
+        int n = Send(write_buf.Read_Ptr(), write_buf.Size());
         if (n <= 0)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (errno == EWOULDBLOCK || errno == EAGAIN)
                 continue;
 
             Terminate();
@@ -778,7 +780,7 @@ int NeoConnection::Decode_Response(u8* view, const size_t bytes)
 		return -3;  // soft error
 	} // end if no data
 
-    //Dump_Hex((const char*)view, bytes);
+    Utils::Dump_Hex((const char*)view, bytes);
     size_t decoded = 0; // tacks decoded bytes thus far
     int ret;            // holds return values
 
@@ -1065,15 +1067,16 @@ int NeoConnection::Send_Hellov5()
         float removed_version;
     };
     std::vector<Param_Helper> param_list{
-        {"schema", conn_params["schema"], 5.0, 5.0},
-        {"user_agent", conn_params["user_agent"].type != BoltType::Unk ?
-            conn_params["user_agent"] :
+        {"user_agent", (pextras && pextras[0]["user_agent"].type != BoltType::Unk) ?
+            pextras[0]["user_agent"] :
             BoltValue(("LB/v" + std::to_string(client_id + 1) + ".0").c_str()), 1.0, 100},
 
-        {"patch_bolt", conn_params["patch_bolt"], 4.3, 4.4},
-        {"routing", conn_params["routing"], 4.1, 100},
-        {"notifications_minimum_severity", conn_params["notifications_minimum_severity"], 5.2, 100},
-        {"notifications_disabled_categories", conn_params["notifications_disabled_categories"], 5.2, 5.4}
+        {"patch_bolt", (pextras ? pextras[0]["patch_bolt"] : BoltValue::Make_Unknown()), 4.3, 4.4},
+        {"routing", (pextras ? pextras[0]["routing"] : BoltValue::Make_Unknown()), 4.1, 100},
+        {"notifications_minimum_severity", (pextras ? pextras[0]["notifications_minimum_severity"]
+            : BoltValue::Make_Unknown()), 5.2, 100},
+        {"notifications_disabled_categories", 
+            (pextras ? pextras[0]["notifications_disabled_categories"] : BoltValue::Make_Unknown()), 5.2, 5.4}
     };
 
 	auto task = tasks.Front();
@@ -1096,8 +1099,8 @@ int NeoConnection::Send_Hellov5()
         BoltValue bmp = BoltValue::Make_Map();
         for (auto& param : param_list)
         {
-            if (param.val.type != BoltType::Unk && param.active_version <= version && 
-                param.removed_version > version)
+            if (param.val.type != BoltType::Unk && 
+                (param.active_version <= version && param.removed_version > version))
             {
                 bmp.Insert_Map(param.key.c_str(), param.val);
             } // end if not unknown
@@ -1117,17 +1120,20 @@ int NeoConnection::Send_Hellov5()
     } // end if connecting
     else if (task->get().state == QueryState::Logon)
     {
-        /*std::cout << conn_params["username"].ToString() << "   " <<
-            conn_params["password"].ToString() << std::endl;*/
         task->get().state = QueryState::Connection;
-        hello = (BoltValue(BOLT_LOGON, { {
+        hello = (BoltValue(BOLT_LOGON, { pauth[0] }));
+
+        /*hello = (BoltValue(BOLT_LOGON, { {
             mp("scheme", "basic"),
-            mp("principal", conn_params["username"]),
-            mp("credentials", conn_params["password"])
-        } }));
+            mp("principal", pparam->at("username")),
+            mp("credentials", pparam->at("password"))
+        } }));*/
     } // end else
 
     encoder.Encode(hello);
+    /*std::cout << hello.ToString() << "\n";
+    std::cout << pauth->ToString() << "\n";
+	Utils::Dump_Hex((const char*)write_buf.Read_Ptr(), write_buf.Size());*/
     if (!Flush())
     { 
 		Release_Pool<BoltValue>(offset);
@@ -1158,14 +1164,19 @@ int NeoConnection::Send_Hellov4()
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     std::string uagent{ ("LB/" + std::to_string(client_id + 1) + ".0").c_str() };
 
+    BoltValue map = pauth[0];
+	map.Insert_Map("user_agent", BoltValue(uagent.c_str()));
     BoltMessage hello(BoltValue(BOLT_HELLO, {
+        map
+        }));
+    /*BoltMessage hello(BoltValue(BOLT_HELLO, {
         BoltValue({
             mp("user_agent", uagent.c_str()),
             mp("scheme", "basic"),
-            mp("principal", conn_params["username"]),
-            mp("credentials", conn_params["password"])
-        })
-        }));
+            mp("principal", pparam->at("username")),
+            mp("credentials", pparam->at("password"))
+            })
+        }));*/
 
     encoder.Encode(hello);
     if (!Flush())
