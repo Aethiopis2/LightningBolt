@@ -1,6 +1,6 @@
 /**
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
- * 
+ *
  * @version 1.0
  * @date created 9th of April 2025, Wednesday
  * @date updated 18th of January 2026, Sunday
@@ -8,9 +8,9 @@
 #pragma once
 
 
-//===============================================================================|
-//          INCLUDES
-//===============================================================================|
+ //===============================================================================|
+ //          INCLUDES
+ //===============================================================================|
 #include "connection/tcp_client.h"
 #include "bolt/bolt_decoder.h"
 #include "bolt/bolt_encoder.h"
@@ -23,26 +23,6 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
-using EncodeCallback = void(*)(int result, void* user);
-using ResultCallback = void(*)(BoltResult&);
-
-
-/**
- * @brief holds the state of a pipelined query along with its view into
- *  the buffer and the decoded results that point right at that buffer
- *  which can be shallow copied to a caller.
- */
-struct DecoderTask
-{
-    QueryState state;       // current state of the query
-    BoltView view;          // view into the buffer for this query
-    BoltResult result;      // results of bolt values
-
-    ResultCallback cb = nullptr;    // a callback for async procs ideal for web apps.
-    EncodeCallback ecb = nullptr;
-};
-
-
 /**
  * @brief neo4j server version info, I only care of major and minor ones;
  *  appears in reverse order in little-endian.
@@ -71,9 +51,9 @@ class NeoCell;
 /**
  * brief a connection abstraction. The main query engine, NeoCell, would get to
  *  use this object to send and recv from neo4j server instance. The class contains
- *  members is_open, a boolean flag that is true when connected to a server, an 
+ *  members is_open, a boolean flag that is true when connected to a server, an
  *  optional client_id that is used for identification.
- * 
+ *
  * The class makes use of specialized buffer object BoltBuf and high speed
  *  encoder/decoder objects that allows it to send/recv from neo4j db via bolt.
  */
@@ -81,16 +61,16 @@ class NeoConnection : public TcpClient
 {
     friend class NeoCell;
 
-public: 
+public:
 
     NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
-    
+
     int Init(const int cli_id = -1);
     int Reconnect();
     int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
         BoltValue extras = BoltValue::Make_Map(), const int chunks = -1,
-        EncodeCallback encb = nullptr, ResultCallback rscb = nullptr);
+        std::function<void(BoltResult&)> rscb = nullptr);
     int Fetch(BoltMessage& out);
 
     int Begin(const BoltValue& options = BoltValue::Make_Map());
@@ -112,25 +92,25 @@ public:
 
     void Terminate();
     void Set_ClientID(const int cli_id);
-	void Set_Host_Address(const std::string& host, const std::string& port);
-    void Set_Callbacks(EncodeCallback ecall, ResultCallback rscb);
+    void Set_Host_Address(const std::string& host, const std::string& port);
+    void Set_Callbacks(std::function<void(BoltResult&)> rscb);
 
     std::string Get_Last_Error() const;
     std::string State_ToString() const;
 
-private: 
-    
+private:
+
     // connection paramters; kept inside driver
     BoltValue* pauth;       // authentication token
-    BoltValue* pextras;     // extra conneection parameters
+    BoltValue* pextras;     // extra connection parameters
 
     int client_id;          // connection identifier
-	int tran_count;		    // number of transactions executed; simulates nesting
-	bool is_open;           // connection flag
+    int tran_count;		    // number of transactions executed; simulates nesting
+    bool is_open;           // connection flag
     size_t bytes_recvd;     // helper that store's the number of bytes to decode
     std::string err_string; // store's a dump of error
 
-	LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses
+    LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses
     LockFreeQueue<BoltResult> results;      // queue of query reults decoded
     Neo4jVerInfo supported_version;         // holds major and minor versions for server
 
@@ -141,7 +121,7 @@ private:
     BoltEncoder encoder;
     BoltDecoder decoder;
 
-            
+
     //====================
     // utilities
     //====================
@@ -166,8 +146,8 @@ private:
     inline int Success_Reset(DecoderTask& task, int& skip);
 
     inline int Handle_Record(DecoderTask& task, int& skip);
-	inline int Handle_Failure(DecoderTask& task, int& skip);
-	inline int Handle_Ignored(DecoderTask& task, int& skip);
+    inline int Handle_Failure(DecoderTask& task, int& skip);
+    inline int Handle_Ignored(DecoderTask& task, int& skip);
 
     void Encode_Pull(const int n);
 

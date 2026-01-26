@@ -8,9 +8,9 @@
 #pragma once
 
 
-//===============================================================================|
-//          INCLUDES
-//===============================================================================|
+ //===============================================================================|
+ //          INCLUDES
+ //===============================================================================|
 #include "connection/neoconnection.h"
 
 
@@ -50,19 +50,18 @@ struct CellCommand
     BoltValue Routes;       // list of routes for route
     int n = -1;             // size for fetching
 
-    ResultCallback cb = nullptr;    // a callback for async procs ideal for web apps.
-    EncodeCallback ecb = nullptr;   // a callback to encoder
+    std::function<void(BoltResult&)> cb = nullptr;    // a callback for async procs ideal for web apps.
 };
 
 
 namespace Auth
 {
-    inline BoltValue Basic(const std::string& user, const std::string& password)
+    inline BoltValue Basic(const char* user, const char* password)
     {
         return BoltValue({
             mp("scheme", "basic"),
-            mp("principal", user.c_str()),
-            mp("credentials", password.c_str())
+            mp("principal", user),
+            mp("credentials", password)
             });
     } // end Basic
 } // end AuthToken
@@ -81,8 +80,11 @@ public:
     int Start(const int id = 1);
     int Enqueue_Request(CellCommand&& cmd);
     int Fetch(BoltResult& result);
+    int Get_Socket() const;
 
+    bool Is_Connected() const;
     void Stop();
+    void DWake();
     std::string Get_Last_Error() const;
 
 private:
@@ -97,13 +99,12 @@ private:
     std::thread encoder_thread; // writer thread id
     std::thread decoder_thread; // reader therad id
 
-	NeoConnection connection;           // a connection instance; either standalone or routed
-	LockFreeQueue<CellCommand> equeue;  // request queue for the cell
-    
-	void Encoder_Loop();
-	void Decoder_Loop();
+    NeoConnection connection;           // a connection instance; either standalone or routed
+    LockFreeQueue<CellCommand> equeue;  // request queue for the cell
+
+    void Encoder_Loop();
+    void Decoder_Loop();
     void EWake();
-    void DWake();
     void Sleep(std::atomic<bool>& s);
     void Wait_Task();
     void Set_Running(const bool state);

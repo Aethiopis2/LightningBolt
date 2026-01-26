@@ -1,19 +1,19 @@
 /**
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
- * 
+ *
  * @brief stress testing bolt encoder and decoder speeds
  * @version 1.2
  * @date 9th of April 2025, Wednesday
- * 
+ *
  * @copyright Copyright (c) 2025
- * 
+ *
  */
 
 
 
-//===============================================================================|
-//          INCLUDES
-//===============================================================================|
+ //===============================================================================|
+ //          INCLUDES
+ //===============================================================================|
 #include <chrono>
 #include "neopool.h"
 using namespace std;
@@ -26,32 +26,30 @@ static std::atomic<int> records{ 0 };
 //===============================================================================|
 //          FUNCTIONS
 //===============================================================================|
-void QueryCallback(int rc, void*) 
-{
-    /*static int c = 1;
-    std::cout << "called run." << c++ << std::endl;*/
-} // end QueryCallback
-
-void FetchCallbackFn(BoltResult& res) 
+void FetchCallbackFn(BoltResult& res)
 {
     /*std::cout << "=======================\n";
-    for (auto& v : res.records)
-            Utils::Print("Records: %s", v.ToString().c_str());
-    std::cout << "=======================\n";*/
+      std::cout << "thread id: " << res.client_id << "\n";*/
+    for (auto& v : res.records);
+    //Utils::Print("Records: %s", v.ToString().c_str());
+    //std::cout << "=======================\n";
 
     records.fetch_add(static_cast<int>(res.records.size()), std::memory_order_relaxed);
     completed.fetch_add(1, std::memory_order_relaxed);
 } // end FetchCallbackFn
 
 
-int main() 
+int main()
 {
     constexpr int QUERY_COUNT = 1000;
-	std::string url = "bolt://localhost:7687";
+    std::string url = "bolt://localhost:7687";
     BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
-    
-	NeoCellPool pool(4, url, &basic);
-    pool.Start(true);
+
+    NeoCellPool pool(4, url, &basic);
+    if (pool.Start(true) < 0)
+    {
+        Dump_Err_Exit("Failed to start connection pool");
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -65,7 +63,6 @@ int main()
             cmd.params = BoltValue::Make_Map();
             cmd.extras = BoltValue::Make_Map();
             cmd.cb = FetchCallbackFn;
-            cmd.ecb = QueryCallback;
             cell->Enqueue_Request(std::move(cmd));
         }
     }

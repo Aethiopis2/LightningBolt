@@ -1,11 +1,11 @@
 /**
  * @brief implementation detials for NeoQE, the Query Engine
- * 
+ *
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @date created 10th of December 2025, Wednesday
  * @date updated 12th of Decemeber 2025, Friday
- * 
+ *
  * @copyright Copyright (c) 2025
  */
 
@@ -27,9 +27,9 @@
  * @param con_string the connection string to connect to neo4j server
  */
 NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
-	: connection(urls, pauth, pextras), running(false), twait(true), 
-	  esleep(false), dsleep(false)
-{ } // end NeoCell
+	: connection(urls, pauth, pextras), running(false), twait(true),
+	esleep(false), dsleep(false) {
+} // end NeoCell
 
 
 /**
@@ -38,7 +38,6 @@ NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
 NeoCell::~NeoCell()
 {
 	Stop();
-	GetBoltPool<BoltValue>()->Reset_All();   // reset the pool
 } // end NeoConnection
 
 
@@ -48,13 +47,13 @@ NeoCell::~NeoCell()
  *  if not. On Successful negotiation the function sends a HELLO message for < v5.0 and
  *  followed by LOGON message for v5.0+. During handshake, should peer closes the connection
  *  the function attempts reconnect a couple of more times before giving up.
- * 
+ *
  * @param id application defined connection identifer
- * 
+ *
  * @return 0 on success. -1 on sys error, -2 app speific error s.a version not supported
  */
 int NeoCell::Start(const int id)
-{   
+{
 	if (int ret; (ret = connection.Init(id)) < 0)
 		return ret;
 
@@ -65,7 +64,7 @@ int NeoCell::Start(const int id)
 
 	// wait for result
 	Wait_Task();
-    return read_ret;	// should be ready
+	return read_ret;	// should be ready
 } // end Start
 
 
@@ -112,13 +111,32 @@ int NeoCell::Fetch(BoltResult& results)
 	return 0;
 } // end Fetch
 
+
+/**
+ * @brief returns the underlying socket descriptor
+ */
+int NeoCell::Get_Socket() const
+{
+	return connection.Get_Socket();
+} // end Get_Socket
+
+
 /**
  * @brief returns the last error string from the active connection
  */
 std::string NeoCell::Get_Last_Error() const
 {
-    return connection.Get_Last_Error();
+	return connection.Get_Last_Error();
 } // end Get_Last_Error
+
+
+/**
+ * @brief indicates if the underlying connection is still active
+ */
+bool NeoCell::Is_Connected() const
+{
+	return !connection.Is_Closed();
+} // end Is_Connected
 
 
 /**
@@ -131,20 +149,20 @@ void NeoCell::Stop()
 
 	if (connection.supported_version.major >= 5)
 		Enqueue_Request({ CellCmdType::Logoff });
-	
+
 	// drain all requrests before terminating
 	do {
 		Wait_Task();
-	} while (!connection.tasks.Is_Empty());
+	} while (!connection.tasks.Is_Empty() || !equeue.Is_Empty());
 
 	connection.Terminate();
 	Set_Running(false);
 
 	EWake();
-	if (encoder_thread.joinable()) 
+	if (encoder_thread.joinable())
 		encoder_thread.join();
 
-	if (decoder_thread.joinable()) 
+	if (decoder_thread.joinable())
 		decoder_thread.join();
 } // end Stop
 
@@ -167,10 +185,8 @@ void NeoCell::Encoder_Loop()
 				switch (req->get().type)
 				{
 				case CellCmdType::Run:
-					write_ret = connection.Run(req->get().cypher.c_str(), req->get().params, 
-						req->get().extras, -1, req->get().ecb, req->get().cb);
-
-					if (req->get().ecb) req->get().ecb(write_ret, nullptr);
+					write_ret = connection.Run(req->get().cypher.c_str(), req->get().params,
+						req->get().extras, -1, req->get().cb);
 					break;
 
 				case CellCmdType::Begin:
@@ -222,7 +238,6 @@ void NeoCell::Decoder_Loop()
 	bool has_more = false;	// used to indicate if we need to poll more
 	while (Is_Running())
 	{
-		int prev_tasks = static_cast<int>(connection.tasks.Size());
 		if (!connection.tasks.Is_Empty() || !equeue.Is_Empty() || has_more)
 		{
 			if ((read_ret = connection.Poll_Readable()) < 0)
@@ -318,7 +333,7 @@ void NeoCell::Wait_Task()
 
 		twait.wait(bwait);	 // task is not ready, we wait
 	} // end while
-	
+
 	// reset it
 	twait.store(true, std::memory_order_release);
 } // end Block_Until

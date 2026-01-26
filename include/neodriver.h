@@ -18,6 +18,9 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
+constexpr int MAX_EVENTS = 1024;
+
+
 enum class DbMode
 {
     Read,
@@ -41,12 +44,12 @@ class NeoDriver
 {
 public:
 
-    NeoDriver(const std::string& urls, BoltValue auth, 
+    NeoDriver(const std::string& urls, BoltValue auth,
         BoltValue extra = BoltValue::Make_Map());
     ~NeoDriver();
 
     int Execute(std::string& query, std::map<std::string, std::string> params = {});
-    int Execute_Async(std::string& query, ResultCallback cb,
+    int Execute_Async(std::string& query, std::function<void(BoltResult&)> cb,
         std::map<std::string, std::string> params = {});
     int Fetch(BoltResult& result);
 
@@ -60,6 +63,9 @@ private:
     BoltValue extras;       // any extra connection params (power user mode, not me).
 
     int pool_size;
+    int epfd;                   // event file descriptor for polling
+    epoll_event events[MAX_EVENTS];   // epoll events array
+
     std::thread poll_thread;    // polls ready connections
     std::atomic<bool> looping;
 

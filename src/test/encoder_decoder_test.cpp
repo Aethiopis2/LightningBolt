@@ -86,7 +86,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(nullptr);
         }, iterations);
         PrintResult("Null", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -99,7 +99,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(true);
         }, iterations);
         PrintResult("Bool", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -112,7 +112,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(1234567890);
         }, iterations);
         PrintResult("Integer", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -126,7 +126,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode((double)1.23);
         }, iterations);
         PrintResult("Float", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -140,7 +140,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(str.c_str(), str.length());
         }, iterations);
         PrintResult("String", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -154,7 +154,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(bytes);
         }, iterations);
         PrintResult("Bytes", avg_ns);
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -172,7 +172,7 @@ void Encode_Test(size_t iterations)
         }, iterations);
 
         PrintResult("List", avg_ns);
-        // Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
     {
@@ -200,7 +200,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(complexMap);
         }, iterations);
         PrintResult("Map", avg_ns);
-        // Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
 
@@ -234,7 +234,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(bolt_struct);
         }, iterations);
         PrintResult("Struct", avg_ns);
-        // Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 
 
@@ -274,7 +274,7 @@ void Encode_Test(size_t iterations)
             encoder.Encode(msg);
         }, iterations);
         PrintResult("Message", avg_ns);        
-        // Dump_Hex((const char*)buf.Data(), buf.Size());
+        //Utils::Dump_Hex((const char*)buf.Data(), buf.Size());
     }
 } // end Encode_Test
 
@@ -522,8 +522,8 @@ void Decode_Test(size_t iterations)
 
         std::string s;
         auto avg_ns = Benchmark([&] {
-            buf.Reset(); 
             decoder.Decode(val);
+            buf.Reset();
         }, iterations);
         PrintResult("Message", avg_ns);        
         //cout << val.ToString() << endl;
@@ -533,7 +533,7 @@ void Decode_Test(size_t iterations)
 
 int main() 
 {
-    Print_Title();
+    Utils::Print_Title();
 
     constexpr size_t iterations = 1'000'000;
     Encode_Test(iterations);

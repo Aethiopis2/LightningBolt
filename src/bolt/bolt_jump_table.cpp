@@ -153,7 +153,6 @@ static inline bool Decode_Float(u8*& pos, BoltValue& out)
 template <typename T>
 static inline bool Decode_Bytes(u8*& pos, BoltValue& out)
 {
-    // const u8 marker = *pos++;
     T len; 
     if constexpr (sizeof(T) == 1) 
         len = static_cast<T>(*++pos);
@@ -163,7 +162,7 @@ static inline bool Decode_Bytes(u8*& pos, BoltValue& out)
         len = ntohl(len);
 
     pos += sizeof(T);
-    out = BoltValue::Make_Bytes(pos, len);
+    out = BoltValue::Make_Bytes(pos - out.buf->Data(), len, out.buf);
     pos += (len);
     
     return true;
@@ -183,8 +182,8 @@ static inline bool Decode_Tiny_String(u8*& pos, BoltValue& out)
 {
     u8 len = ((*pos) & 0x0F);
     ++pos;
-    out = BoltValue::Make_String(reinterpret_cast<const char*>(pos), 
-        static_cast<u32>(len) );
+    out = BoltValue::Make_String(pos - out.buf->Data(),
+        static_cast<u32>(len), out.buf );
     pos += len;
     return true;
 } // end Decode_Tiny_String
@@ -211,8 +210,8 @@ static inline bool Decode_String(u8*& pos, BoltValue& out)
     } // end if
 
     pos += sizeof(T);
-    out = BoltValue::Make_String(reinterpret_cast<const char*>(pos), 
-        static_cast<u32>(len) );
+    out = BoltValue::Make_String(pos - out.buf->Data(),
+        static_cast<u32>(len), out.buf );
     pos += len;
 
     return true;
@@ -233,11 +232,12 @@ static inline bool Decode_List_Tiny(u8*& pos, BoltValue& out)
 {
     u8 header = *pos++;
     u8 size = header & 0x0F;
-    out = BoltValue::Make_List(pos, size);
+    out = BoltValue::Make_List(pos - out.buf->Data(), size, out.buf);
 
     BoltValue dummy;
     for (u8 i = 0; i < size; ++i)
     {
+        dummy.buf = out.buf;
         if (!jump_table[*pos](pos, dummy))
             return false;
     } // end for
@@ -268,11 +268,12 @@ static inline bool Decode_List(u8*& pos, BoltValue& out)
     } // end if
 
     pos += sizeof(T);
-    out = BoltValue::Make_List(pos, size);
+    out = BoltValue::Make_List(pos - out.buf->Data(), size, out.buf);
     BoltValue dummy;
     for (T i = 0; i < size; i++)
     {
         u8 tag = *pos;
+		dummy.buf = out.buf;
         if (!jump_table[tag](pos, dummy))
             return false;
     } // end for Decode_List
@@ -294,13 +295,16 @@ static inline bool Decode_Map_Tiny(u8*& pos, BoltValue& out)
 {
     u8 header = *pos++;   //*((*pos)++);
     u8 size = header & 0x0F;
-    out = BoltValue::Make_Map(pos, size);
+    out = BoltValue::Make_Map(pos - out.buf->Data(), size, out.buf);
 
     BoltValue dummy;
     for (u8 i = 0; i < size; i++)
     {
+		dummy.buf = out.buf;
         if (!jump_table[*pos](pos, dummy))  // key
             return false;
+
+		dummy.buf = out.buf;
         if (!jump_table[*pos](pos, dummy))  // val
             return false;
     } // end for
@@ -330,14 +334,16 @@ static inline bool Decode_Map(u8*& pos, BoltValue& out)
     } // end if
 
     pos += sizeof(T);
-    out = BoltValue::Make_Map(pos, len);
+    out = BoltValue::Make_Map(pos - out.buf->Data(), len, out.buf);
 
     BoltValue dummy;
     for (u8 i = 0; i < len; i++)
     {
+		dummy.buf = out.buf;
         if (!jump_table[*pos](pos, dummy))  // key
             return false;
 
+		dummy.buf = out.buf;
         if (!jump_table[*pos](pos, dummy))  // val
             return false;
     } // end for
@@ -360,12 +366,14 @@ static inline bool Decode_Struct(u8*& pos, BoltValue& out)
     u8 header = *pos++; 
     u8 size = header & 0x0F;
     u8 tag = *pos++;  
-    out = BoltValue::Make_Struct(pos, tag, size);
+    out = BoltValue::Make_Struct(pos - out.buf->Data(), tag, size,
+        out.buf);
 
     BoltValue dummy;
     for (u8 i = 0; i < size; i++)
     {
         u8 tag = *pos;
+		dummy.buf = out.buf;
         if (!jump_table[tag](pos, dummy))
             return false;
     } // end for

@@ -2,10 +2,8 @@
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
  * @version 1.0
- * @date 16th of April 2025, Sunday.
- * 
- * @copyright Copyright (c) 2025
- * 
+ * @date created 16th of April 2025, Sunday.
+ * @date updated 25th of June 2026, Sunday.
  */
 #pragma once
 
@@ -15,6 +13,7 @@
 //          INCLUDES
 //===============================================================================|
 #include "basics.h"
+#include "bolt/bolt_buf.h"
 #include "bolt/boltvalue_pool.h"
 #include "bolt/bolt_jump_table.h"
 
@@ -132,10 +131,12 @@ enum class BoltType : std::uint8_t
  */
 struct BoltValue
 {
-	BoltType type;      // type of value stored
+	BoltType type;              // type of value stored
+    BoltBuf* buf = nullptr;
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
-    s64 size = 0;       // size it would take to encode this baby on the buffer in bytes
-    u8 padding[3];
+    s64 size = 0;               // size it would take to encode this baby on the buffer in bytes
+    bool is_decoded = false;
+    u8 padding[2];
 
     union 
     {
@@ -145,45 +146,41 @@ struct BoltValue
   
         struct 
         {
-            const char* str;
+            union
+            {
+				size_t offset;      // during decoding
+				const char* str;    // during encoding
+            };
             size_t length;
         } str_val;
 
         struct 
         {
-            u8* ptr;
+            union
+            {
+                size_t offset;      // during decoding
+				u8* ptr;            // during encoding
+			};
             size_t size;
         } byte_val;
 
         struct 
         {
-            union 
-            {
-                size_t offset;      // used for encoding 
-                u8* ptr;            // used for decoding
-            };
-            bool is_decoded;
+            size_t offset;
             size_t size;   
         } list_val;
         
         struct 
         { 
-            size_t key_offset;      // used for encoding
+            size_t key_offset;      // used for en/decoding
             size_t value_offset;
-            u8* ptr;                // used for decoding
-            bool is_decoded;
             size_t size;   
         } map_val;
 
         struct 
         {
             u8 tag;
-            union 
-            {
-                size_t offset;      // during encoding
-                u8* ptr;            // while decoding
-            };
-            bool is_decoded;
+            size_t offset;      // during en/decoding
             size_t size;
         } struct_val;
     };
@@ -201,8 +198,8 @@ struct BoltValue
 	 * @brief a constructor for boolean values.
      */
     BoltValue(bool b)
+		: type(BoltType::Bool)
     {
-        type = BoltType::Bool;
         bool_val = b;
         size = 1;
     } // end bool cntr
@@ -212,8 +209,8 @@ struct BoltValue
 	 * @brief a constructor for integer values.
      */
     BoltValue(int i)
+		: type(BoltType::Int)
     {
-        type = BoltType::Int;
         int_val = i;
 
         if (i >= -16 && i <= 127) size = 1;
@@ -228,8 +225,8 @@ struct BoltValue
 	 * @brief a constructor for integer values.
      */
     BoltValue(s64 i)
+		: type(BoltType::Int)
     {
-        type = BoltType::Int;
         int_val = i;
 
         if (i >= -16 && i <= 127) size = 1;
@@ -244,6 +241,7 @@ struct BoltValue
 	 * @brief a constructor for double values.
      */
     BoltValue(double d)
+		: type(BoltType::Float)
     {
         type = BoltType::Float;
         float_val = d;
@@ -255,8 +253,8 @@ struct BoltValue
 	 * @brief a constructor for C style (me prefers this) string values.
      */
     BoltValue(const char* str)
+		: type(BoltType::String)
     {
-        type = BoltType::String;
         str_val.str = str;
         str_val.length = strlen(str);
 
@@ -271,16 +269,10 @@ struct BoltValue
 	 * @brief a constructor for string values.
      */
     BoltValue(const std::string& str)
+		: BoltValue(str.c_str())
     {
-        type = BoltType::String;
-        str_val.str = str.data();
-        str_val.length = str.size();
-
-        if (str_val.length < 16) size = str_val.length + 1;
-        else if (str_val.length < 255) size = str_val.length + 2;
-        else if (str_val.length < 65536) size = str_val.length + 3;
-        else size = str_val.length + 5;
     } // end string cntr
+
 
     /**
 	 * @brief a constructor for neo4j map types
@@ -292,7 +284,6 @@ struct BoltValue
             pool = GetBoltPool<BoltValue>();
 
         map_val.size = 1;
-        map_val.is_decoded = false;
         map_val.key_offset = pool->Alloc(2);
         map_val.value_offset = map_val.key_offset + 1;
 
@@ -318,7 +309,6 @@ struct BoltValue
             pool = GetBoltPool<BoltValue>();
 
         list_val.size = init.size();
-        list_val.is_decoded = false;
         list_val.offset = pool->Alloc(list_val.size);
 
         size_t i = 0;
@@ -345,7 +335,6 @@ struct BoltValue
 
         size_t i = 0;
         map_val.size = init.size();
-        map_val.is_decoded = false;
         map_val.key_offset = pool->Alloc(map_val.size << 1);
         map_val.value_offset = map_val.key_offset + map_val.size;
 
@@ -377,7 +366,6 @@ struct BoltValue
             pool = GetBoltPool<BoltValue>();
 
         struct_val.size = init.size();
-        struct_val.is_decoded = false;
         struct_val.tag = tag;
         struct_val.offset = pool->Alloc(struct_val.size);
 
@@ -407,30 +395,29 @@ struct BoltValue
         size_t size;
         u8* ptr;
         size_t offset;
-        bool is_decoded;
 
-        
         if (type == BoltType::Struct)
-        { 
+        {
             size = struct_val.size;
-            ptr = struct_val.ptr;
             offset = struct_val.offset;
-            is_decoded = struct_val.is_decoded;
         } // end if
         else if (type == BoltType::List)
         {
             size = list_val.size;
-            ptr = list_val.ptr;
             offset = list_val.offset;
-            is_decoded = struct_val.is_decoded;
         } // end else if
 
         if (is_decoded)
         {
             size_t i = 0;
+            if (!buf || size == 0)
+				return BoltValue::Make_Unknown();
+
+			ptr = buf->Data() + offset;
             BoltValue v;
             for (i = 0; i < size; i++)
             {
+				v.buf = buf;
                 jump_table[*ptr](ptr, v);
                 if (i == index)
                     return v;
@@ -455,7 +442,7 @@ struct BoltValue
         return BoltValue::Make_Unknown();
     } // end operator
 
-    //===============================================================================|
+    
     /**
      * @brief operator overloading for map types
      * 
@@ -466,14 +453,16 @@ struct BoltValue
         size_t length = strlen(key);
         if (type == BoltType::Map)
         {
-            if (map_val.is_decoded)
+            if (is_decoded)
             {
-                u8* ptr = map_val.ptr;
+				u8* ptr = buf->Data() + map_val.key_offset;
                 for (size_t i = 0; i < map_val.size; i++)
                 {
                     BoltValue out_key; 
                     BoltValue out_val; 
 
+					out_key.buf = buf;
+					out_val.buf = buf;
                     jump_table[*ptr](ptr, out_key);
                     jump_table[*ptr](ptr, out_val);
                     
@@ -503,7 +492,7 @@ struct BoltValue
         return BoltValue::Make_Unknown();
     } // end operator[]
 
-    //===============================================================================|
+    
     /**
      * @brief template method to get the value stored in the BoltValue union.
      * 
@@ -535,7 +524,7 @@ struct BoltValue
 		} // end switch
     } // end Get
 
-    //===============================================================================|
+    
     /**
      * @brief Converts the BoltValue to a human-readable string representation.
      *  The actual string representation depends on the type of the value.
@@ -547,7 +536,7 @@ struct BoltValue
         return str_jump[static_cast<u8>(type)](this);
     } // end ToString
 
-    //===============================================================================|
+    
     /**
      * @brief inserts a value into the list at the start of the offset by
      *  shifting existing values to the right.
@@ -563,7 +552,7 @@ struct BoltValue
         list_val.size++;
     } // end Add_List
 
-    //===============================================================================|
+    
     /**
      * @brief inserts a key-value pair into the map at the begining of the pool
      *  by shifting existing values to the right.
@@ -582,7 +571,7 @@ struct BoltValue
         map_val.size++;
     } // end Insert_Map 
 
-    //===============================================================================|
+    
     /**
      * @brief inserts a field into the struct at the start of the offset by
      *  shifting existing values to the right.
@@ -598,7 +587,7 @@ struct BoltValue
         struct_val.size++;
     } // end Add_Struct
 
-    //===============================================================================|
+    
     /* Small factories */
     /**
      * @brief factory for producing Null types at will
@@ -610,7 +599,7 @@ struct BoltValue
         return v;
     } // end Make_Null
 
-    //===============================================================================|
+    
     /**
      * @brief factory to produce boolean
      * 
@@ -624,7 +613,7 @@ struct BoltValue
         return v;
     } // end Make_Int
 
-    //===============================================================================|
+    
     /**
      * @brief factory for integer values.
      * 
@@ -638,7 +627,7 @@ struct BoltValue
         return bv;
     } // end Make_Int
 
-    //===============================================================================|
+    
     /**
      * @brief factory for float/double values.
      * 
@@ -652,35 +641,41 @@ struct BoltValue
         return v;
     } // end Make_Float
 
-    //===============================================================================|
+    
     /**
      * @brief factory for Bytes. Which are really arrays of byte values
      *  like ASCII encoded strings; for claritiy simply classified as bytes 
      * 
-     * @param ptr address of the byte data/array in the buffer
+     * @param offeset into the decoding buffer
      * @param len the length of the buffer
+     * @param pbuf pointer to the bolt buffer
      */
-    static BoltValue Make_Bytes(u8* ptr, const u32 len)
+    static BoltValue Make_Bytes(const size_t offset, const u32 len, BoltBuf* pbuf)
     {
         BoltValue v;
         v.type = BoltType::Bytes;
-        v.byte_val.ptr = ptr;
+        v.buf = pbuf;
+		v.is_decoded = true;
+		v.byte_val.offset = offset;
         v.byte_val.size = len;
         return v;
     } // end Make_Bytes
 
-    //===============================================================================|
+    
     /**
      * @brief factory of strings
      * 
-     * @param ptr pointer to the start of the byte address
+     * @param offeset into the decoding buffer
      * @param len the length of the buffer
+	 * @param pbuf pointer to the bolt buffer
      */
-    static BoltValue Make_String(const char* str, u32 len)
+    static BoltValue Make_String(const size_t offset, const u32 len, BoltBuf* pbuf)
     {
         BoltValue v;
         v.type = BoltType::String;
-        v.str_val.str = str;
+        v.buf = pbuf;
+        v.is_decoded = true;
+        v.str_val.offset = offset;
         v.str_val.length = len;
         return v;
     } // end Make_String
@@ -689,15 +684,17 @@ struct BoltValue
     /**
      * @brief factory for hetero-lists (lazy decoding style)
      * 
-     * @param data_ptr start of buffer containing bolt encoded values
+	 * @param offset starting offset into the decoding buffer
      * @param len the length of the buffer
+	 * @param pbuf pointer to the bolt buffer
      */
-    static BoltValue Make_List(u8* data_ptr, const size_t len)
+    static BoltValue Make_List(const size_t offset, const size_t len, BoltBuf* pbuf)
     {
         BoltValue v;
         v.type = BoltType::List;
-        v.list_val.is_decoded = true;
-        v.list_val.ptr = data_ptr;
+        v.is_decoded = true;
+		v.buf = pbuf;
+		v.list_val.offset = offset;
         v.list_val.size = len;
         return v;
     } // end Make_List
@@ -714,10 +711,7 @@ struct BoltValue
         BoltValue v;
         v.type = BoltType::List;
         v.pool = GetBoltPool<BoltValue>();
-
-        v.list_val.is_decoded = false;
         v.list_val.size = 0;
-        v.list_val.ptr = nullptr;   // not decoded
         v.list_val.offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset(); 
         return v;
     } // end Make_List
@@ -726,15 +720,18 @@ struct BoltValue
     /**
      * @brief factory for maps
      * 
-     * @param offset into the pool
-     * @param len count of key value pairs
+     * @param offset starting offset into the decoding buffer
+     * @param len the length of the buffer
+	 * @param pbuf pointer to the bolt buffer
      */
-    static BoltValue Make_Map(u8* ptr, const size_t len)
+    static BoltValue Make_Map(const size_t offset, const size_t len, BoltBuf* pbuf)
     {
         BoltValue v;
         v.type = BoltType::Map;
-        v.map_val.is_decoded = true;
-        v.map_val.ptr = ptr;
+        v.is_decoded = true;
+		v.buf = pbuf;
+		v.map_val.key_offset = offset;
+		v.map_val.value_offset = offset + len;
         v.map_val.size = len;
         return v;
     } // end Make_List
@@ -750,8 +747,7 @@ struct BoltValue
         BoltValue v;
         v.type = BoltType::Map;
 		v.pool = GetBoltPool<BoltValue>();
-        v.map_val.is_decoded = false;
-        v.map_val.ptr = nullptr;
+        v.is_decoded = false;
         v.map_val.size = 0;
         v.map_val.key_offset = size > 0 ? v.pool->Alloc(size << 1) : v.pool->Get_Last_Offset();
         v.map_val.value_offset = v.map_val.key_offset + size;
@@ -762,22 +758,24 @@ struct BoltValue
     /**
      * @brief factory of structs
      * 
-     * @param u8 the structure tag (see bolt packstream)
-     * @param fields a pointer to fields to bind
+	 * @param offset into the decoding buffer
+	 * @param tag id for structure type
      * @param len the count of fields
+	 * @param pbuf pointer to the bolt buffer
      */
-    static BoltValue Make_Struct(u8* ptr, const u8 tag, const size_t len)
+    static BoltValue Make_Struct(const size_t offset, const u8 tag, const size_t len, BoltBuf* pbuf)
     {
         BoltValue v;
         v.type = BoltType::Struct;
+        v.is_decoded = true;
+		v.buf = pbuf;
+		v.struct_val.offset = offset;
         v.struct_val.size = len;
-        v.struct_val.ptr = ptr;
-        v.struct_val.is_decoded = true;
         v.struct_val.tag = tag;
         return v;
     } // end Make_Struct
 
-    //===============================================================================|
+    
     /**
      * @brief factor for structs with preset values
      * 
@@ -790,14 +788,12 @@ struct BoltValue
         v.type = BoltType::Struct;
         v.pool = GetBoltPool<BoltValue>();
         v.struct_val.size = 0;
-        v.struct_val.ptr = nullptr;
 		v.struct_val.offset = size > 0 ? v.pool->Alloc(size) : v.pool->Get_Last_Offset();
-        v.struct_val.is_decoded = false;
         v.struct_val.tag = tag;
         return v;
 	} // end Make_Struct
 
-    //===============================================================================|
+    
     /**
      * @brief unknown factory
      */
@@ -808,7 +804,7 @@ struct BoltValue
         return v;
     } // end Make_Unknown
 
-    //===============================================================================|
+    
     /**
      * @brief Frees the BoltValue from the pool if it is not decoded.
      *  This is used to release resources when the value is no longer needed.
@@ -818,17 +814,17 @@ struct BoltValue
      */
     static void Free_Bolt_Value(BoltValue& val)
     {
-        if (val.type == BoltType::List && !val.list_val.is_decoded)
+        if (val.type == BoltType::List)
             val.pool->Release();
 
-        else if (val.type == BoltType::Map && !val.map_val.is_decoded)
+        else if (val.type == BoltType::Map)
             val.pool->Release();
 
-        else if (val.type == BoltType::Struct && !val.struct_val.is_decoded)
+        else if (val.type == BoltType::Struct)
             val.pool->Release();
     } // end FreeBoltValue
 
-    //===============================================================================|
+    
     /**
      * @brief used to decode integer values from the buffer and ajust the endianess
      *  according to the machine.
@@ -864,7 +860,7 @@ struct BoltValue
         return "null";
     } // end ToString_Null
 
-    //===============================================================================|
+   
     /**
      * @brief Converts a BoltValue boolean to a human-readable string representation.
      *  The boolean is represented as "true" or "false".
@@ -877,7 +873,7 @@ struct BoltValue
         return (ptr->bool_val ? "true" : "false");
     } // end ToString_Bool
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue integer to a human-readable string representation.
      *  The integer is represented as a decimal number.
@@ -890,7 +886,7 @@ struct BoltValue
         return std::to_string(ptr->int_val);
     } // end ToString_Int
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue float to a human-readable string representation.
      *  The float is represented as a decimal number.
@@ -903,7 +899,7 @@ struct BoltValue
         return std::to_string(ptr->float_val);
     } // end ToString_Float
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue string to a human-readable string representation.
      *  The string is represented as a quoted string.
@@ -913,12 +909,23 @@ struct BoltValue
      */
     static std::string ToString_String(const BoltValue* ptr)
     {
-        if (!ptr->str_val.str || ptr->str_val.length == 0)
-            return "\"\"";
-        return std::string(ptr->str_val.str, ptr->str_val.length);
+        if (!ptr->is_decoded)
+        {
+            if (!ptr->str_val.str || ptr->str_val.length == 0)
+                return "\"\"";
+            return std::string(ptr->str_val.str, ptr->str_val.length);
+        } // end if
+        else
+        {
+            if (!ptr->buf || ptr->str_val.offset <= 0)
+                return "\"\"";
+            const char* str = reinterpret_cast<const char*>
+                (ptr->buf->Data() + ptr->str_val.offset);
+            return std::string(str, ptr->str_val.length);
+        }
     } // end ToString_String
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue byte array to a human-readable string representation.
      *  The byte array is represented as a comma-separated list of hexadecimal values 
@@ -933,20 +940,39 @@ struct BoltValue
             return "[]";
             
         std::ostringstream stream;
-        for (size_t i = 0; i < ptr->byte_val.size; i++) 
+		stream << "[";
+
+        if (!ptr->is_decoded)
         {
+            for (size_t i = 0; i < ptr->byte_val.size; i++)
+            {
                 stream << "0x"
                     << std::hex << std::uppercase
                     << std::setw(2) << std::setfill('0')
                     << static_cast<int>(ptr->byte_val.ptr[i]);
                 if (i != ptr->byte_val.size - 1)
                     stream << ",";
-        }
+			} // end for
+        } // end if not decoded
+        else
+        {
+            u8* data_ptr = ptr->buf->Data() + ptr->byte_val.offset;
+            for (size_t i = 0; i < ptr->byte_val.size; i++)
+            {
+                stream << "0x"
+                    << std::hex << std::uppercase
+                    << std::setw(2) << std::setfill('0')
+                    << static_cast<int>(data_ptr[i]);
+                if (i != ptr->byte_val.size - 1)
+                    stream << ",";
+            } // end for
+		} // end else decoded
+
         stream << "]";
         return stream.str();
     } // end ToString_Bytes
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue list to a human-readable string representation.
      *  The list is represented as a comma-separated list of values enclosed in square 
@@ -961,7 +987,7 @@ struct BoltValue
             return "[]";
 
         std::string s = "[";
-        if (!pval->list_val.is_decoded) 
+        if (!pval->is_decoded) 
         {
             for (size_t i = 0; i < pval->list_val.size; i++) 
             {
@@ -973,10 +999,14 @@ struct BoltValue
         } // end if decoded
         else 
         {
-            u8* ptr = pval->list_val.ptr;
+            if (!pval->buf)
+				return "[]";
+
+			u8* ptr = pval->buf->Data() + pval->list_val.offset;
+            BoltValue v;
             for (size_t i = 0; i < pval->list_val.size; i++) 
             {
-                BoltValue v;
+				v.buf = pval->buf;
                 jump_table[*ptr](ptr, v);
                 s += v.ToString();
                 if (i != pval->list_val.size - 1)
@@ -988,7 +1018,7 @@ struct BoltValue
         return s;
     } // end ToString_List
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue map to a human-readable string representation.
      *  The map is represented as a comma-separated list of key-value pairs enclosed 
@@ -1003,13 +1033,16 @@ struct BoltValue
             return "{}";
 
         std::string s = "{";
-        if (pval->map_val.is_decoded) 
+        if (pval->is_decoded) 
         {
-            u8* ptr = pval->map_val.ptr;
+			u8* ptr = pval->buf->Data() + pval->map_val.key_offset;
             for (size_t i = 0; i < pval->map_val.size; i++) 
             {
                 BoltValue k; 
                 BoltValue v; 
+
+				k.buf = pval->buf;
+				v.buf = pval->buf;
                 jump_table[*ptr](ptr, k);
                 jump_table[*ptr](ptr, v);
                 s += k.ToString() + ":" + v.ToString();
@@ -1035,7 +1068,7 @@ struct BoltValue
         return s;
     } // end ToString_Map
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue struct to a human-readable string representation.
      *  The struct is represented as a comma-separated list of fields enclosed in curly 
@@ -1050,9 +1083,9 @@ struct BoltValue
             return "{}";
 
         std::string s = "{";
-        if (pval->struct_val.is_decoded) 
+        if (pval->is_decoded) 
         {
-            u8* ptr = pval->struct_val.ptr;
+			u8* ptr = pval->buf->Data() + pval->struct_val.offset;
             if (pval->struct_val.tag == 0x4E)
             {
                 s += ToString_Node(ptr);
@@ -1110,6 +1143,7 @@ struct BoltValue
                 for (size_t i = 0; i < pval->struct_val.size; i++) 
                 {
                     BoltValue v; 
+					v.buf = pval->buf;
                     jump_table[*ptr](ptr, v);
                     s += v.ToString();
                         
@@ -1133,7 +1167,7 @@ struct BoltValue
         return s;
     } // end ToString_Struct
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Node to a human-readable string representation.
      *  The Node is represented with its ID, labels, properties, and element ID.
@@ -1159,7 +1193,7 @@ struct BoltValue
         return s;
     } // end ToString_Point2D
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Relationship to a human-readable string representation.
      *  The Relationship is represented with its ID, start node ID, end node ID, type, 
@@ -1196,7 +1230,7 @@ struct BoltValue
         return s;
     } // end ToString_Relationship
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue UnboundRelationship to a human-readable string 
      *  representation. The UnboundRelationship is represented with its ID, type, 
@@ -1223,7 +1257,7 @@ struct BoltValue
         return s;
     } // end ToString_Unbound_Relationship
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Path to a human-readable string representation.
      *  The Path is represented with its nodes, relationships, and indices.
@@ -1248,7 +1282,7 @@ struct BoltValue
         return s;
     } // end ToString_Path
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Date to a human-readable string representation.
      *  The Date is represented with its days since epoch Jan 01 1970.
@@ -1268,7 +1302,7 @@ struct BoltValue
         return s;
     } // end ToString_Date
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Time to a human-readable string representation.
      *  The Time is represented with its nanoseconds and timezone offset in seconds.
@@ -1290,7 +1324,7 @@ struct BoltValue
         return s;
     } // end ToString_Time
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue LocalTime to a human-readable string representation.
      *  The LocalTime is represented with its nanoseconds since midnight.
@@ -1310,7 +1344,7 @@ struct BoltValue
         return s;
     } // end ToString_LocalTime
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue DateTime to a human-readable string representation.
      *  The DateTime is represented with its seconds since epoch, nanoseconds, and 
@@ -1335,7 +1369,7 @@ struct BoltValue
         return s;
     } // end ToString_DateTime
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue DateTimeTimeZoneId to a human-readable string 
      *  representation. The DateTimeTimeZoneId is represented with its seconds since 
@@ -1360,7 +1394,7 @@ struct BoltValue
         return s;
     } // end ToString_DateTimeTimeZoneId
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue LocalDateTime to a human-readable string representation.
      *  The LocalDateTime is represented with its seconds since epoch and nanoseconds.
@@ -1382,7 +1416,7 @@ struct BoltValue
         return s;
     } // end ToString_LocalDateTime
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Duration to a human-readable string representation.
      *  The Duration is represented with its months, days, seconds, and nanoseconds.
@@ -1408,7 +1442,7 @@ struct BoltValue
         return s;
     } // end ToString_Duration
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Point2D to a human-readable string representation.
      *  The Point2D is represented with its SRID, x, and y coordinates.
@@ -1431,7 +1465,7 @@ struct BoltValue
         return s;
     } // end ToString_Point2D
 
-    //===============================================================================|
+    
     /**
      * @brief Converts a BoltValue Point3D to a human-readable string representation.
      *  The Point3D is represented with its SRID, x, y, and z coordinates.
@@ -1455,7 +1489,7 @@ struct BoltValue
         return s;
     } // end ToString_Point3D
 
-    //===============================================================================|
+    
     /**
      * @brief
      */
@@ -1464,7 +1498,7 @@ struct BoltValue
         return "<?>";
     } // end Unk
 
-    //===============================================================================|
+    
     /**
 	 * @brief a helper to insert a BoltValue into the pool at a specific start offset,
 	 *  the function shifts existing items in the pool to make space for the new item,
@@ -1492,19 +1526,22 @@ struct BoltValue
             BoltValue* prev = pool->Get(static_cast<size_t>(i) - 1);
 
 			// shift offsets for lists/maps/structs
-            if (prev->type == BoltType::List && !prev->list_val.is_decoded)
+            if (!prev->is_decoded)
             {
-                prev->list_val.offset++;
-            } // end if list
-            else if (prev->type == BoltType::Map && !prev->map_val.is_decoded)
-            {
-                prev->map_val.key_offset++;
-                prev->map_val.value_offset++;
-            } // end else if map
-            else if (prev->type == BoltType::Struct && !prev->struct_val.is_decoded)
-            {
-                prev->struct_val.offset++;
-            } // end else if struct
+                if (prev->type == BoltType::List)
+                {
+                    prev->list_val.offset++;
+                } // end if list
+                else if (prev->type == BoltType::Map)
+                {
+                    prev->map_val.key_offset++;
+                    prev->map_val.value_offset++;
+                } // end else if map
+                else if (prev->type == BoltType::Struct)
+                {
+                    prev->struct_val.offset++;
+                } // end else if struct
+			} // end if not decoded
 
 			*bv = *prev;
 		} // end for shift

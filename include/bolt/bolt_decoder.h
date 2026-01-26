@@ -48,13 +48,10 @@ friend class BoltValue;
 public:
 
     BoltDecoder(BoltBuf &b) : buf(b) {}
-    BoltDecoder(const BoltDecoder&) = default;
-    BoltDecoder(BoltDecoder&&) noexcept = default;
-	BoltDecoder& operator=(const BoltDecoder&) = default;
-	BoltDecoder& operator=(BoltDecoder&&) noexcept = default;
 
     void Decode(BoltValue &out)
     {
+		out.buf = &buf;
         u8* start_pos = buf.Read_Ptr();
         u8* pos = start_pos;
         size_t size = buf.Size();
@@ -76,6 +73,7 @@ public:
 
     int Decode(u8* view_start, BoltValue& v)
     {
+		v.buf = &buf;
         u16 chunk = *((u16*)view_start);
         u16 chunk_size = htons(chunk);
 
@@ -102,6 +100,7 @@ public:
      */
     void Decode(BoltMessage& msg)
     {
+		msg.msg.buf = &buf;
         u16 chunk = *((u16*)buf.Read_Ptr());
         msg.chunk_size = htons(chunk);
         buf.Consume(2);
@@ -126,6 +125,7 @@ public:
      */
     int Decode(u8* view_start, BoltMessage &msg)
     {
+		msg.msg.buf = &buf;
         u16 chunk = *((u16*)view_start);
         msg.chunk_size = htons(chunk);
 
