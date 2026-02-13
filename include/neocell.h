@@ -72,30 +72,40 @@ namespace Auth
 //===============================================================================|
 class NeoCell
 {
+    friend void LB_Handle_Status(LBStatus, NeoCell*);
+
 public:
 
     NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoCell();
 
-    int Start(const int id = 1);
+    LBStatus Start(const int id = 1);
     int Enqueue_Request(CellCommand&& cmd);
     int Fetch(BoltResult& result);
     int Get_Socket() const;
+    int Get_Try_Count() const;
+    int Get_Max_Try_Count() const;
 
     bool Is_Connected() const;
+    std::string Get_Last_Error() const;
+
     void Stop();
     void DWake();
-    std::string Get_Last_Error() const;
+	bool Can_Retry();
+    void Set_Retry_Count(const int n);
 
 private:
 
     int read_ret;           // store's return codes from read thread
     int write_ret;          // return values from the corresponding write
+	int try_count;          // number of connection attempts, resets on successful connection or exhaustion
+    int max_tries;          // the maximum number of retries allowed; default to 5
 
     std::atomic<bool> running;  // thread loop controller
     std::atomic<bool> esleep;   // when true encoder thread is sleeping.
     std::atomic<bool> dsleep;   // when true it as well means decoder thread is sleeping
-    std::atomic<bool> twait;    // decoder task wait, when true thread should wait
+    std::string last_error;     // a string version of last error occured either from neo4j or internal
+
     std::thread encoder_thread; // writer thread id
     std::thread decoder_thread; // reader therad id
 
@@ -106,7 +116,6 @@ private:
     void Decoder_Loop();
     void EWake();
     void Sleep(std::atomic<bool>& s);
-    void Wait_Task();
     void Set_Running(const bool state);
 
     bool Is_Running() const;

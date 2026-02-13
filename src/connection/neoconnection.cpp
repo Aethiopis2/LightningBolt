@@ -42,14 +42,13 @@ static bool Grow_Buffers(BoltBuf& buf)
  * @brief constructor
  */
 NeoConnection::NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
-    : encoder(write_buf), decoder(read_buf), pauth(pauth), pextras(pextras)
+    : encoder(write_buf), decoder(read_buf), pauth(pauth), pextras(pextras), is_done(false)
 {
     // defaults
     client_id = -1;
     tran_count = 0;
     bytes_recvd = 0;
     is_open = false;
-    err_string = "";
 
     // set the url
     size_t pos = urls.find_first_of("://");
@@ -75,26 +74,19 @@ NeoConnection::~NeoConnection() {}
 
 
 /**
- * @brief sets the members hostname and port from the parameter for later, i.e.
- *  during re-connection. It then start's a TCP Connection with the server over
- *  the provided address. To start the connection it uses the member Reconnect().
- *  It then sends NEGOTIATION + HELLO + LOGON (v5.1+) to start a formal session
- *  with the server. It also sets the client id, which maybe defaulted to -1
- *
+ * @brief a wrapper to Reconnect function and sets the client id from the 
+ *  parameter passed on successful connection.
+ * 
  * @param cli_id optional id to set for this connection
  *
- * @return 0 on success. -1 on sys error with code contained in errno
+ * @return 0k on success. LB_Status codes on failure
  */
-int NeoConnection::Init(const int cli_id)
+LBStatus NeoConnection::Init(const int cli_id)
 {
-    if (int rc; (rc = Reconnect()) < 0)
-        return rc;
+    LBStatus rc = Reconnect();
+    if (LB_OK(rc)) Set_ClientID(cli_id);
 
-    if (!is_open)
-        return -1;
-
-    Set_ClientID(cli_id);
-    return 0;
+    return rc;
 } // end Init
 
 
@@ -104,43 +96,40 @@ int NeoConnection::Init(const int cli_id)
  *  and sends bolt HELLO messages based on the version negotiated. On successful
  *  connection it setts the boolean attribute is_open to true to flag open connection.
  *
- * @return 0 on success. -1 on sys error with code contained in errno
+ * @return LB_Status codes
  */
-int NeoConnection::Reconnect()
+LBStatus NeoConnection::Reconnect()
 {
     // reset previous query states
     tasks.Clear();
-    if (Connect() < 0)
-        return -1;
 
-    if (Negotiate_Version())
+    LBStatus rc = Connect();
+    if (!LB_OK(rc))
+        return rc;
+
+    rc = Negotiate_Version();
+    if (LB_OK(rc))
     {
         // play by non-blocking rules from henceforth
-        Set_NonBlock();
+        Enable_NonBlock();
+        Enable_Keepalive();
 
         // push a state into the queue
         tasks.Enqueue({ QueryState::Connection });
-        if (supported_version.major >= 6 || supported_version.major >= 5)   // use version 6/5 hello
-        {
-            if (int ret; (ret = Send_Hellov5()) < 0)
-                return ret;     // -1 sys error or -3 non fatal
-        } // end if v5.1+
-        else if (supported_version.major >= 1)                          // version 4 and below 
-        {
-            if (Send_Hellov4() < 0)
-                return -1;
-        } // end else if legacy
+        if (supported_version.major >= 5)       // use version 6/5 hello
+			rc = Send_Hellov5();
+        else if (supported_version.major >= 1)  // version 4 and below 
+            rc = Send_Hellov4();
         else
         {
-            err_string = "unsupported negotiated version";
-            return -2;
+            return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
+                LBCode::LB_CODE_VERSION);
         } // end else
 
         is_open = true;
     } // end if Negotiate ok
-    else return -1;
 
-    return 0;
+    return rc;
 } // end Reconnect
 
 
@@ -577,15 +566,6 @@ int NeoConnection::Route(BoltValue routing,
 
 
 /**
- * @brief returns false if a connection is closed
- */
-bool NeoConnection::Is_Closed() const
-{
-    return !is_open;
-} // end Is_Closed
-
-
-/**
  * @brief termiates the active connection via Disconnect() member and sets the
  *  boolean member is_open to false.
  */
@@ -639,15 +619,6 @@ void NeoConnection::Set_Callbacks(std::function<void(BoltResult&)> rscb)
 
 
 /**
- * @brief return's the last error as string encounterd in this connection
- */
-std::string NeoConnection::Get_Last_Error() const
-{
-    return err_string;
-} // end Dump_Error
-
-
-/**
  * @brief returns a stringified version of the current driver state.
  */
 std::string NeoConnection::State_ToString() const
@@ -672,26 +643,14 @@ std::string NeoConnection::State_ToString() const
 /**
  * @brief sends the contents of write buffer to the connected peer.
  *
- * @return a true on success alas false
+ * @return LBStatus codes with LB_OK being successful.
  */
-int NeoConnection::Poll_Writable()
+LBStatus NeoConnection::Poll_Writable()
 {
-    while (!write_buf.Empty())
-    {
-        int n = Send(write_buf.Read_Ptr(), write_buf.Size());
-        if (n <= 0)
-        {
-            if (errno == EWOULDBLOCK || errno == EAGAIN)
-                continue;
+    LBStatus rc = Send(write_buf.Read_Ptr(), write_buf.Size());
+    if (LB_OK(rc)) write_buf.Consume(LB_Aux(rc));
 
-            Terminate();
-            return -1;
-        } // end if
-
-        write_buf.Consume(n);
-    } // end while
-
-    return 0;
+    return rc;
 } // end Poll_Writable
 
 
@@ -712,55 +671,43 @@ int NeoConnection::Poll_Writable()
  *
  * @return a true on success
  */
-int NeoConnection::Poll_Readable()
+LBStatus NeoConnection::Poll_Readable()
 {
-    int ret;        // store's return value
+    LBStatus rc;        // store's return value
 
     // do we need to grow for space
     if (read_buf.Writable_Size() < 256)
     {
         if ((read_buf.Grow(read_buf.Capacity() << 1)) < 0)
         {
-            err_string = "failed to grow read buffer";
-            return -1;
+            //err_string = "failed to grow read buffer";
+            return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_MEMORY);
         } // end if
     } // end if
 
-    ssize_t n = Recv(read_buf.Write_Ptr(), read_buf.Writable_Size());
-    if (n == 0)
-    {
-        err_string = "peer has closed the connection";
-        return -2;
-    } // end if peer closed connection
-    else if (n < 0)
-    {
-        if (errno == EWOULDBLOCK || errno == EAGAIN)
-        {
-            std::this_thread::yield();
-            return 1;   // try again
-        } // end if
-        else
-        {
-            return -1;
-        } // end else
-    } // end if
+    rc = Recv(read_buf.Write_Ptr(), read_buf.Writable_Size());
+    if (!LB_OK(rc))
+        return rc;
 
     // if data is completely received push to response handler
-    bytes_recvd += n;
+    int bytes = LB_Aux(rc);
+    bytes_recvd += bytes;
+
     if (Recv_Completed())
     {
-        if ((ret = Decode_Response(read_buf.Read_Ptr(), bytes_recvd)) < 0)
+        rc = Decode_Response(read_buf.Read_Ptr(), bytes_recvd);
+        if (!LB_OK(rc))
         {
             bytes_recvd = 0;
-            return ret;
+            return rc;
         } // end if
 
         read_buf.Consume(bytes_recvd);
         bytes_recvd = 0;
     } // end if complete
 
-    read_buf.Advance(n);
-    return ret;
+    read_buf.Advance(bytes);
+    return LB_Make();
 } // end Poll_Readable
 
 
@@ -768,68 +715,62 @@ int NeoConnection::Poll_Readable()
  * @brief persuming that data has been fully received from Poll_Readable(), the
  *  function decodes the bolt encoded responses (message).
  */
-int NeoConnection::Decode_Response(u8* view, const size_t bytes)
+LBStatus NeoConnection::Decode_Response(u8* view, const size_t bytes)
 {
-    if (bytes == 0)
-    {
-        err_string = "no data to decode.";
-        return -3;  // soft error
-    } // end if no data
-
-    //Utils::Dump_Hex((const char*)view, bytes);
+    /*Utils::Dump_Hex((const char*)view, bytes);*/
     size_t decoded = 0; // tacks decoded bytes thus far
-    int ret;            // holds return values
+    LBStatus rc = 0;    // holds return values
 
     while (decoded < bytes)
     {
         if ((0xB0 & view[2]) != 0xB0)
         {
-            err_string = "Invalid Bolt Message Format.";
+            //err_string = "Invalid Bolt Message Format.";
             return -2;      // protocol error, a hard one
         } // end if not valid
 
         auto task = tasks.Front();
         if (!task.has_value())
         {
-            err_string = "No query in the queue to handle response.";
+            //err_string = "No query in the queue to handle response.";
             return -3;  // soft error
         } // end if no query
 
         task->get().view.cursor = view;
         task->get().view.size = bytes - decoded;
 
-        int skip = 0;       // number of bytes to skip for today
         u8 s = static_cast<u8>(task->get().state);
         u8 tag = view[3];
 
         switch (tag)
         {
         case BOLT_SUCCESS:
-            ret = (this->*success_handler[s])(task->get(), skip);
+            rc = (this->*success_handler[s])(task->get());
             break;
 
         case BOLT_FAILURE:
-            ret = Handle_Failure(task->get(), skip);
+            rc = Handle_Failure(task->get());
             break;
 
         case BOLT_RECORD:
-            ret = Handle_Record(task->get(), skip);
+            rc = Handle_Record(task->get());
             break;
 
         case BOLT_IGNORED:
-            ret = Handle_Ignored(task->get(), skip);
+            rc = Handle_Ignored(task->get());
             break;
 
         default:
-            err_string = "protocol error, unknown tag: %d" + std::to_string(tag);
-            ret = -2;      // hard error
+            //err_string = "protocol error, unknown tag: %d" + std::to_string(tag);
+            return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT);    // hard error
         } // end switch
 
+        int skip = LB_Aux(rc);
         view += skip;
         decoded += skip;
     } // end while
 
-    return ret;
+    return rc;
 } // end Decode_Response
 
 
@@ -847,24 +788,23 @@ int NeoConnection::Get_Client_ID() const
  *  sending buffer and kernel is probably sending it. The function also resets
  *  the send buffer once data is fully uploaded.
  *
- * @return a true on success
+ * @return LBStatus with LB_OK being a succesful call.
  */
-bool NeoConnection::Flush()
+LBStatus NeoConnection::Flush()
 {
+    LBStatus rc;
     while (!write_buf.Empty())
     {
-        if (Poll_Writable() < 0)
-            return false;   // has to be a syscall error always
+        rc = Poll_Writable();
+        if (!LB_OK(rc)) break;   // has to be a syscall error always
 
         // Optional: safety guard
         if (write_buf.Size() > 0)
-        {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } // end if
     } // end while
 
     write_buf.Reset();
-    return true;
+    return rc;
 } // end Flush
 
 
@@ -903,7 +843,7 @@ bool NeoConnection::Recv_Completed()
     auto qs = tasks.Front();
     if (!qs.has_value())
     {
-        err_string = "No query in the queue to handle response.";
+        //err_string = "No query in the queue to handle response.";
         return -3;  // soft error
     } // end if no query
 
@@ -923,16 +863,13 @@ bool NeoConnection::Recv_Completed()
  *
  * @return true if record streaming is done else false
  */
-bool NeoConnection::Is_Record_Done(BoltMessage& m)
+bool NeoConnection::Is_Record_Done(DecoderTask& t)
 {
-    if (m.msg(0).type == BoltType::Map &&
-        m.msg(0)["has_more"].type != BoltType::Unk &&
-        m.msg(0)["has_more"].bool_val == true)
+    if (t.result.summary.msg(0).type == BoltType::Map &&
+        t.result.summary.msg(0)["has_more"].type != BoltType::Unk &&
+        t.result.summary.msg(0)["has_more"].bool_val == true)
     {
-        // yet streaming, notify fetch to continue
-        auto qs = tasks.Front();
-        if (qs.has_value())
-            qs->get().state = QueryState::Streaming;
+        t.state = QueryState::Streaming;    // still streaming
     } // end if
     else return true;
 
@@ -969,10 +906,13 @@ bool NeoConnection::Encode_And_Flush(QueryState state, BoltMessage& msg)
  *  numbers supported. If server does not support manifest, it simply starts
  *  with version 4 or less.
  *
- * @return a true on success else false on sys error
+ * @return 0K on success alas status errors
  */
-bool NeoConnection::Negotiate_Version()
+LBStatus NeoConnection::Negotiate_Version()
 {
+    LBStatus rc;      // return status codes
+
+	int buf_len = 128;
     u8 versions[128]{
         0x60, 0x60, 0xB0, 0x17,         // neo4j magic number
         0x00, 0x00, 0x01, 0xFF,         // manifest v1
@@ -981,11 +921,14 @@ bool NeoConnection::Negotiate_Version()
         0x00, 0x00, 0x00, 0x02          // version 2 (last two are not supported)
     };
 
-    if (Send(versions, 20) < 0)
-        return false;
-
-    if (Recv((char*)versions, sizeof(versions)) < 0)
-        return false;
+	int len = 20;    // length of versions to send
+    rc = Send(versions, len);
+    if (!LB_OK(rc))
+        return rc;
+    
+    rc = Recv((char*)versions, buf_len);
+    if (!LB_OK(rc))
+        return rc;
 
     u8* ptr = versions;
     u64 nums;           // stores count of supported versions
@@ -1009,6 +952,11 @@ bool NeoConnection::Negotiate_Version()
             ++ptr; ++count;
         } // end while cont
     } // end if v5.7+ spec
+    else if (ntohl(*(u32*)ptr) == 0)
+    {
+        return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
+            LBCode::LB_CODE_VERSION);
+    } // end else if unsupported version
     else nums = 1;
 
     // pick the higest version
@@ -1028,10 +976,8 @@ bool NeoConnection::Negotiate_Version()
     } // end for
 
     // send to server; and echo back whatever the server caps are
-    if (Send(alias, 5) < 0)
-        return false;
-
-    return true;
+    len = 5;
+    return Send(alias, len);
 } // end Negotiate_Version
 
 
@@ -1043,9 +989,9 @@ bool NeoConnection::Negotiate_Version()
  *  negotiation, thus LightningBolt implements both steps here as states of
  *  the driver.
  *
- * @return 0 on success
+ * @return LB_Status codes
  */
-int NeoConnection::Send_Hellov5()
+LBStatus NeoConnection::Send_Hellov5()
 {
     BoltMessage hello;
     float version = supported_version.Get_Version();
@@ -1075,63 +1021,63 @@ int NeoConnection::Send_Hellov5()
             (pextras ? pextras[0]["notifications_disabled_categories"] : BoltValue::Make_Unknown()), 5.2, 5.4}
     };
 
+    LBStatus rc = 0;
     auto task = tasks.Front();
-    if (!task.has_value())
+    if (task.has_value())
     {
-        Release_Pool<BoltValue>(offset);
-        err_string = "No query in the queue to handle response.";
-        return -3;      // non fatal
-    } // end if no query
-
-    if (task->get().state == QueryState::Connection)
-    {
-        // persume version 5.3+ is supported; i.e. graft versions 5.x as 
-        //  same versions with minor changes
-
-        // update state to logon
-        task->get().state = QueryState::Logon;
-
-        hello.msg = BoltValue::Make_Struct(BOLT_HELLO);
-        BoltValue bmp = BoltValue::Make_Map();
-        for (auto& param : param_list)
+        if (task->get().state == QueryState::Connection)
         {
-            if (param.val.type != BoltType::Unk &&
-                (param.active_version <= version && param.removed_version > version))
+            // persume version 5.3+ is supported; i.e. graft versions 5.x as 
+            //  same versions with minor changes
+
+            // update state to logon
+            task->get().state = QueryState::Logon;
+
+            hello.msg = BoltValue::Make_Struct(BOLT_HELLO);
+            BoltValue bmp = BoltValue::Make_Map();
+            for (auto& param : param_list)
             {
-                bmp.Insert_Map(param.key.c_str(), param.val);
-            } // end if not unknown
-        } // end for params
+                if (param.val.type != BoltType::Unk &&
+                    (param.active_version <= version && param.removed_version > version))
+                {
+                    bmp.Insert_Map(param.key.c_str(), param.val);
+                } // end if not unknown
+            } // end for params
 
-        // add bolt agent info
-        if (version >= 5.3)
+            // add bolt agent info
+            if (version >= 5.3)
+            {
+                bmp.Insert_Map("bolt_agent", BoltValue({
+                        mp("product", "LightningBolt/v1.0.0"),
+                        mp("platform", "Linux 6.6.87.2/microsoft-standard-WSL2; x64"),
+                        mp("language", "C++/17"),
+                    }));
+            } // end sversion
+
+            hello.msg.Insert_Struct(bmp);
+        } // end if connecting
+        else if (task->get().state == QueryState::Logon)
         {
-            bmp.Insert_Map("bolt_agent", BoltValue({
-                    mp("product", "LightningBolt/v1.0.0"),
-                    mp("platform", "Linux 6.6.87.2/microsoft-standard-WSL2; x64"),
-                    mp("language", "C++/17"),
-                }));
-        } // end sversion
+            task->get().state = QueryState::Connection;
+            hello = (BoltValue(BOLT_LOGON, { pauth[0] }));
+        } // end else
 
-        hello.msg.Insert_Struct(bmp);
-    } // end if connecting
-    else if (task->get().state == QueryState::Logon)
-    {
-        task->get().state = QueryState::Connection;
-        hello = (BoltValue(BOLT_LOGON, { pauth[0] }));
-    } // end else
+        rc = encoder.Encode(hello);
+        if (!LB_OK(rc))
+        {
+            rc = Retry_Encode(hello);
+            if (!LB_OK(rc))
+            {
+                Release_Pool<BoltValue>(offset);
+                return rc;
+            } // end if still bad
+        } // end if wasn't good
 
-    encoder.Encode(hello);
-    /*std::cout << hello.ToString() << "\n";
-    std::cout << pauth->ToString() << "\n";
-    Utils::Dump_Hex((const char*)write_buf.Read_Ptr(), write_buf.Size());*/
-    if (!Flush())
-    {
-        Release_Pool<BoltValue>(offset);
-        return -1;
-    } // end if no flush
-
+        rc = Flush();
+    } // end if has value
+    
     Release_Pool<BoltValue>(offset);
-    return 0;
+    return rc;
 } // end Send_Hellov5
 
 
@@ -1147,9 +1093,9 @@ int NeoConnection::Send_Hellov5()
  * Because the driver uses minimal parameter count it could also be used
  *  for legacy version handshake.
  *
- * @return 0 on success or -2 on fail to define app specific error
+ * @return LB_Status codes, OK on success else error code
  */
-int NeoConnection::Send_Hellov4()
+LBStatus NeoConnection::Send_Hellov4()
 {
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     std::string uagent{ ("LB/" + std::to_string(client_id + 1) + ".0").c_str() };
@@ -1160,108 +1106,92 @@ int NeoConnection::Send_Hellov4()
         map
         }));
 
-    encoder.Encode(hello);
-    if (!Flush())
+    LBStatus rc = encoder.Encode(hello);
+    if (!LB_OK(rc))
     {
-        Release_Pool<BoltValue>(offset);
-        return -1;
-    } // end if no flush
+        rc = Retry_Encode(hello);
+        if (!LB_OK(rc))
+        {
+            Release_Pool<BoltValue>(offset);
+            return rc;
+        } // end if still bad
+    } // end if wasn't good
 
+    rc = Flush();
     Release_Pool<BoltValue>(offset);
-    return 0;
+    return rc;
 } // end Send_Hello
 
 
 /**
- * @brief serves as a safety net when things fire outof sync so as not to cause
- *  segfaults and allow the application to continue safely after having sent a
- *  REST signal possibly, in the worst case.
- *
- * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
- *
- * @return -2 to indicate error and requires RESET or Reconnect
- */
-inline int NeoConnection::Dummy(DecoderTask& task, int& skip)
-{
-    task.state = QueryState::Error;
-    err_string = "State out of sync: " + State_ToString();
-
-    skip = task.view.size;
-    tasks.Dequeue();
-    return -2;      // should send RESET
-} // end dummy
-
-
-/**
  * @brief First message received after authentication with Neo4j graphdb server.
- *  We expect to major modes of connections v4.x and v5.x (latest). In v5.x we deal
+ *  We expect two major modes of connections v4.x and v5.x (latest). In v5.x we deal
  *  with this function twice HELLO + LOGON. Once successfuly authenticated it
  *  sets the driver state to ready.
  *
  * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
  *
- * @return 1 if we need to poll more, 0 if done
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Success_Hello(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Success_Hello(DecoderTask& task)
 {
-    skip = task.view.size;
+    u32 size = static_cast<u32>(task.view.size);
     if (task.state == QueryState::Logon)
     {
-        Send_Hellov5();     // log on the server
-        return 1;           // poll once more
+        Send_Hellov5();     // log on message
+        return LB_Make(LBAction::LB_HASMORE, 
+            LBDomain::LB_DOM_BOLT, LBCode::LB_CODE_NONE, size);     // poll once more
     } // end if
 
-    tasks.Dequeue();
-    read_buf.Reset();
-    return 0;
+    Wake();
+    read_buf.Reset();       // safe to reset we don't need the info
+    return LB_OK_INFO(size);
 } // end Success_Hello
 
 
 /**
- * @brief this handles a successful run query message; we temporariliy save the
- *  metadata returned for the next records inside the view field_names memeber.
+ * @brief this handles a successful run query message; we save the
+ *  metadata returned for the next records inside the view field_names member.
  *  Sets the state to pull to inidcate we expect records next.
  *
  * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
  *
- * @return -2 to indicate error and requires RESET or Reconnect, 1 for more poll
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Success_Run(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Success_Run(DecoderTask& task)
 {
     task.state = QueryState::Pull;
 
     // parse and save the field names; until its needed and guranteed to exist
-    //  as long as we are streaming the result
-    skip = decoder.Decode(task.view.cursor, task.result.fields);
-    return 1;
+    //  as long as we are streaming the result. 
+    // on success returns LB_OK_INFO with aux # of bytes to skip buffer
+    return decoder.Decode(task.view.cursor, task.result.fields);
 } // end Success_Run
 
 
 /**
  * @brief handles the success summary message sent after the completion of each
  *  record streaming. If the summary message contains "has_more" key and is set
- *  to true then it persumes not done and sets the state back to PULL for Fetch()
- *  once done it sets the state to ready.
+ *  to true then it persumes not done and sets the state back to PULL and returns
+ *  OK has more to continue receiving.
  *
  * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
  *
- * @return 0 as success
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Success_Record(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Success_Record(DecoderTask& task)
 {
-    skip = decoder.Decode(task.view.cursor, task.result.summary);
-    if (!Is_Record_Done(task.result.summary)) return 1;
+    LBStatus rc = decoder.Decode(task.view.cursor, task.result.summary);
+    if (!LB_OK(rc))
+        return rc;
+
+    if (!Is_Record_Done(task))
+        return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
+            LBCode::LB_CODE_NONE, LB_Aux(rc));
 
     if (task.cb) task.cb(task.result);
-    tasks.Dequeue();
-    if (tasks.Is_Empty())
-        read_buf.Reset();   // clear buffer
 
-    return 0;
+    return rc; // should be LB_OK_INFO
 } // end Success_Record
 
 
@@ -1269,17 +1199,17 @@ inline int NeoConnection::Success_Record(DecoderTask& task, int& skip)
  * @brief handles the success reset message sent after a RESET command is sent
  *
  * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
  *
- * @return size of bytes processed
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Success_Reset(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 {
-    skip = task.view.size;
+    Wake();     // anything pending
+
     tasks.Dequeue();
     read_buf.Reset();
 
-    return 0;
+    return LB_OK_INFO(task.view.size);
 } // end Success_Reset
 
 
@@ -1290,22 +1220,28 @@ inline int NeoConnection::Success_Reset(DecoderTask& task, int& skip)
  *  the state to streaming to indicate driver is now consuming buffer.
  *
  * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
  *
- * @return bytes decoded
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Handle_Record(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Handle_Record(DecoderTask& task)
 {
     task.state = QueryState::Streaming;
 
     //Dump_Hex((const char*)task.view.cursor, task.view.size);
 
-    BoltMessage record;
-    skip = decoder.Decode(task.view.cursor, record);
-    task.result.records.push_back(record.msg(0));
-    task.result.client_id = client_id;
+    LBStatus rc = decoder.Decode(task.view.cursor, task.result.record);
+    if (!LB_OK(rc))
+        return rc;
 
-    return 1;   // persume not done
+    if (task.cb)
+    {
+        task.cb(task.result);
+    }
+    //task.result.records.push_back(record.msg(0));
+    //task.result.client_id = client_id;
+
+    return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
+        LBCode::LB_CODE_NONE, LB_Aux(rc));
 } // end Success_Record
 
 
@@ -1314,16 +1250,24 @@ inline int NeoConnection::Handle_Record(DecoderTask& task, int& skip)
  *  error string and takes appropriate action based on the current state.
  *
  * @param task the next task on the queue to process
- * @param skip number of bytes to skip buffer
  *
- * @return size of bytes processed, or -2 to indicate hard non-recoverable error,
- *  -3 for soft error
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Handle_Failure(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
 {
-    BoltMessage err;
-    skip = decoder.Decode(task.view.cursor, err);
-    err_string = err.ToString();
+    LBDomain domain = LBDomain::LB_DOM_NEO4J;
+    LBAction action;
+    LBCode code;
+
+    LBStatus rc = decoder.Decode(task.view.cursor, task.result.error);
+    if (!LB_OK(rc))
+    {
+        Wake(); // anyone on wait
+        return rc;
+    } // end if failed decoding
+
+    //err_string = err.ToString();
+    //std::cout << err.ToString() << std::endl;
 
     QueryState qs = task.state;
     switch (qs)
@@ -1331,17 +1275,21 @@ inline int NeoConnection::Handle_Failure(DecoderTask& task, int& skip)
     case QueryState::Connection:
     case QueryState::Logon:
     case QueryState::Logoff:
-        return -2;  // hard-error
+        action = LBAction::LB_FAIL;
+        code = LBCode::LB_CODE_NEO4J_CONNECT;
+        break;
 
     case QueryState::Run:
     case QueryState::Pull:
     case QueryState::Streaming:
-        return -3;  // might be recovered
+        action = LBAction::LB_RESET;
+        code = LBCode::LB_CODE_NEO4J_QUERY;
+        break;
 
     }; // end switch
 
-    // error is handled by the calling routine
-    return 0;
+    Wake();  // those who wait
+    return rc;
 } // end Handle_Failure
 
 
@@ -1351,12 +1299,11 @@ inline int NeoConnection::Handle_Failure(DecoderTask& task, int& skip)
  *
  * @param task the next task on the queue to process
  *
- * @return size of bytes processed
+ * @return LBStatus codes with LB_OK_INFO containing number of bytes to skip
  */
-inline int NeoConnection::Handle_Ignored(DecoderTask& task, int& skip)
+inline LBStatus NeoConnection::Handle_Ignored(DecoderTask& task)
 {
-    skip = task.view.size;
-    return -2;
+    return LB_OK_INFO(task.view.size);
 } // end Handle_Ignored
 
 
@@ -1378,6 +1325,37 @@ void NeoConnection::Encode_Pull(const int n)
     encoder.Encode(pull);
     Release_Pool<BoltValue>(offset);
 } // end Send_Pull
+
+
+/**
+ * @brief waits completion of the next streaming. When the atomic is_done is
+ *  set to true it breaks the loop and terminates. It also wakes/notifies a waiting
+ *  process to continue processing. On exit resets is_done back to false so that
+ *  the next caller can wait till done if needed.
+ */
+void NeoConnection::Wait_Task()
+{
+    while (1)
+    {
+        bool prev = is_done.load(std::memory_order_acquire);
+        if (prev) break;
+
+        is_done.wait(prev);
+    } // end while
+
+    is_done.store(false, std::memory_order_release);    // reset
+} // end Wait_Result
+
+
+/**
+ * @brief wakes a waiting process viz its atomic is_done. Function sets is_done to
+ *  true and sends notifications to wake a waiting thread.
+ */
+void NeoConnection::Wake()
+{
+    is_done.store(true, std::memory_order_release);
+    is_done.notify_one();
+} // end Wake
 
 
 /**
@@ -1445,3 +1423,30 @@ BoltMessage NeoConnection::Route_Legacy(const BoltValue& routing)
     BoltMessage route;
     return route;
 } // end Route_Legacy
+
+
+/**
+ * @brief an encoder could fail only if it runs out of memory to encode with, before
+ *  encoding it checks the size of newdata or bolt message could fit into the
+ *  buffer remaining space, if not this routines gets called flushes the remainig
+ *  bytes inorder to create space for the last failed to be encoded data.
+ * 
+ * @param dat a reference to BoltMessage structure
+ * 
+ * @return LBStatus code with LB_OK as success
+ */
+LBStatus NeoConnection::Retry_Encode(BoltMessage& dat)
+{
+    LBStatus rc = Flush();
+    if (!LB_OK(rc)) return rc;
+
+    // encode it back
+    rc = encoder.Encode(dat);
+    if (!LB_OK(rc))
+    {
+        return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_STATE,
+            LBCode::LB_CODE_ENCODER);
+    } // end if still no encode
+
+    return LB_Make();
+} // end Retry_Encode

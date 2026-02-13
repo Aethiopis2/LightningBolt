@@ -2,9 +2,8 @@
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
  * @version 1.0
- * @date 13th of April 2025, Sunday.
- * 
- * @copyright Copyright (c) 2025 - 2026.
+ * @date created 13th of April 2025, Sunday.
+ * @date updated 2nd of Feburary 2026, Monday.
  */
 #pragma once
 
@@ -13,17 +12,17 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
+#include "neoerr.h"
 #include "bolt/bolt_buf.h"
 #include "bolt/bolt_message.h"
 #include "utils/utils.h"
 
 
 
-
-
 //===============================================================================|
 //          GLOBALS
 //===============================================================================|
+
 
 
 
@@ -54,10 +53,10 @@ public:
      * @param len optional: if sizeof value can't be inferred.
      */
     template <typename T>
-    inline int Encode(const T& val, const size_t len = 0) 
+    inline LBStatus Encode(const T& val, const size_t len = 0) 
     {
         if (!Has_Free(val, len))
-            return -1;
+            return LB_Make(LBAction::LB_FLUSH, LBDomain::LB_DOM_MEMORY);
 
         if constexpr (std::is_same_v<T, std::nullptr_t>) 
         {
@@ -141,7 +140,7 @@ public:
             std::cout << "Type: " << typeid(val).name() << "\n";
         } // end else
 
-        return 0;
+        return LB_Make();
     } // end Encode
 
 private:
@@ -271,7 +270,6 @@ private:
         value = swap_endian_double(value);
         iCpy(buf.Write_Ptr(), &value, sizeof(double));
         buf.Advance(sizeof(double));
-        //Dump_Hex((const char*)buf.Data(), buf.Size());
     } // end Encode_Float
 
 
@@ -284,10 +282,12 @@ private:
     inline void Encode_Bytes(const std::vector<u8> &bytes) 
     {
         size_t len = bytes.size();
-        if (len <= 255) {
+        if (len <= 255) 
+        {
             Write_Bits<u16>((BOLT_BYTES8 << 8) | static_cast<u8>(len));
         } // end if <= 255
-        else if (len <= 0xFFFF) {
+        else if (len <= 0xFFFF) 
+        {
             Write_Bits<u8>(BOLT_BYTES16);
             Write_Bits<u16>(static_cast<u16>(htons(len)));
         } // end else if 16-bits
@@ -460,7 +460,8 @@ private:
 
 
     /**
-     * @brief
+	 * @brief encodes a message which is really a struct type with a header
+	 *  and a tail padding.
      */
     inline void Encode_Message(const BoltMessage &msg)
     {

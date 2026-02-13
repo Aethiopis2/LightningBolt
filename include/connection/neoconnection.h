@@ -59,6 +59,7 @@ class NeoCell;
  */
 class NeoConnection : public TcpClient
 {
+    //friend void LB_Handle_Status(LBStatus, NeoCell*);
     friend class NeoCell;
 
 public:
@@ -66,8 +67,8 @@ public:
     NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
 
-    int Init(const int cli_id = -1);
-    int Reconnect();
+    LBStatus Init(const int cli_id = -1);
+    LBStatus Reconnect();
     int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
         BoltValue extras = BoltValue::Make_Map(), const int chunks = -1,
         std::function<void(BoltResult&)> rscb = nullptr);
@@ -88,14 +89,11 @@ public:
         const std::string& database = "neo4j",
         BoltValue extra = BoltValue::Make_Map());
 
-    bool Is_Closed() const override;
-
     void Terminate();
     void Set_ClientID(const int cli_id);
     void Set_Host_Address(const std::string& host, const std::string& port);
     void Set_Callbacks(std::function<void(BoltResult&)> rscb);
 
-    std::string Get_Last_Error() const;
     std::string State_ToString() const;
 
 private:
@@ -106,9 +104,8 @@ private:
 
     int client_id;          // connection identifier
     int tran_count;		    // number of transactions executed; simulates nesting
-    bool is_open;           // connection flag
+    std::atomic<bool> is_done;  // determines if the next decoding batch is done
     size_t bytes_recvd;     // helper that store's the number of bytes to decode
-    std::string err_string; // store's a dump of error
 
     LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses
     LockFreeQueue<BoltResult> results;      // queue of query reults decoded
@@ -125,31 +122,32 @@ private:
     //====================
     // utilities
     //====================
-    int Poll_Writable();
-    int Poll_Readable();
-    int Decode_Response(u8* view, const size_t bytes);
+    LBStatus Poll_Writable();
+    LBStatus Poll_Readable();
+    LBStatus Decode_Response(u8* view, const size_t bytes);
     int Get_Client_ID() const;
-    int Send_Hellov5();
-    int Send_Hellov4();
+    LBStatus Send_Hellov5();
+    LBStatus Send_Hellov4();
+    LBStatus Flush();
 
-    bool Flush();
     bool Recv_Completed();
-    bool Is_Record_Done(BoltMessage& v);
+    bool Is_Record_Done(DecoderTask& v);
     bool Encode_And_Flush(QueryState s, BoltMessage& v);
-    bool Negotiate_Version();
+    LBStatus Negotiate_Version();
 
     // state based handlers
-    inline int Dummy(DecoderTask& task, int& skip);
-    inline int Success_Hello(DecoderTask& task, int& skip);
-    inline int Success_Run(DecoderTask& task, int& skip);
-    inline int Success_Record(DecoderTask& task, int& skip);
-    inline int Success_Reset(DecoderTask& task, int& skip);
+    inline LBStatus Success_Hello(DecoderTask& task);
+    inline LBStatus Success_Run(DecoderTask& task);
+    inline LBStatus Success_Record(DecoderTask& task);
+    inline LBStatus Success_Reset(DecoderTask& task);
 
-    inline int Handle_Record(DecoderTask& task, int& skip);
-    inline int Handle_Failure(DecoderTask& task, int& skip);
-    inline int Handle_Ignored(DecoderTask& task, int& skip);
+    inline LBStatus Handle_Record(DecoderTask& task);
+    inline LBStatus Handle_Failure(DecoderTask& task);
+    inline LBStatus Handle_Ignored(DecoderTask& task);
 
     void Encode_Pull(const int n);
+    void Wait_Task();
+    void Wake();
 
     BoltMessage Routev43(const BoltValue& routing,
         const BoltValue& bookmarks,
@@ -160,7 +158,9 @@ private:
         const std::string& database);
     BoltMessage Route_Legacy(const BoltValue& routing);
 
-    using Success_Fn = int (NeoConnection::*)(DecoderTask&, int&);
+    LBStatus Retry_Encode(BoltMessage&);
+
+    using Success_Fn = LBStatus (NeoConnection::*)(DecoderTask&);
     Success_Fn success_handler[QUERY_STATES]{
         &NeoConnection::Success_Hello,
         &NeoConnection::Success_Hello,

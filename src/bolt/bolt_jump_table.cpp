@@ -1,13 +1,9 @@
 /**
- * @file addicion.cpp
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
- * @brief implementation detials for BoltDecoder object
- * 
  * @version 1.0
- * @date 14th of April 2025, Monday.
- * 
- * @copyright Copyright (c) 2025
+ * @date created 14th of April 2025, Monday.
+ * @date updated 2nd of Feburary 2026, Monday.
  */
 
 
@@ -30,7 +26,6 @@
  */
 static inline bool UnImp(u8*& pos, BoltValue& out)
 {
-    std::cout << "Not supposed to be here" << std::endl;
     ++pos;
     out = BoltValue::Make_Unknown();
     return false;

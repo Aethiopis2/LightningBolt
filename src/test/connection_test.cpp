@@ -11,7 +11,8 @@
  //===============================================================================|
  //          INCLUDES
  //===============================================================================|
-#include "neocell.h"
+#include "neodriver.h"
+#include "utils/errors.h"
 
 
 
@@ -29,23 +30,19 @@ int main()
 {
     Utils::Print_Title();
     const size_t iterations = 10000;
-    std::string url = "bolt://localhost:7687";
-    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoCell con(url, &basic, nullptr);
+        NeoDriver driver("bolt://localhost:7687",
+            Auth::Basic("neo4j", "tobby@melona"));
 
-        if (int ret; (ret = con.Start(i + 1)) < 0)
-        {
-            if (ret == -1)
-                Dump_Err_Exit("Failed to connect to the server");
-            else
-                Fatal(con.Get_Last_Error().c_str());
-        } // end if 
+        NeoCell* pcell = driver.Get_Session();
+        if (!pcell)
+            Fatal("%s", driver.Get_Last_Error().c_str());
+
         Utils::Print("Connected: %d", (int)(i + 1));
 
-        con.Stop();
+        driver.Close();
         Utils::Print("Disconnected");
     } // end outer for
 

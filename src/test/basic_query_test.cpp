@@ -16,7 +16,7 @@
  //          INCLUDES
  //===============================================================================|
 #include <chrono>
-#include "neocell.h"
+#include "neodriver.h"
 #include <numeric>
 using namespace std;
 
@@ -53,6 +53,8 @@ void Test_Record_Fetch()
 
     for (size_t i = 0; i < iterations; i++)
     {
+        NeoDriver driver("bolt://localhost:7687",
+            Auth::Basic("neo4j", "tobby@melona"));
         NeoCell con(BoltValue({
             mp("host", "localhost:7687"),
             mp("username", "neo4j"),

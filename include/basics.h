@@ -62,19 +62,23 @@
 #if defined(WINDOWS)
 #include <WinSock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>    // tcp_keepalive + SIO_KEEPALIVE_VALS
 
 #define CLOSE(s)                closesocket(s)
 #define POLL(ps, len, wait_sec) WSAPoll(ps, len, wait_sec)
 
 #else
 #include <sys/socket.h>
+#include <netinet/tcp.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <netinet/in.h>
+
 #include <unistd.h>
-#include <arpa/inet.h>
+
 #include <netdb.h>
 
 

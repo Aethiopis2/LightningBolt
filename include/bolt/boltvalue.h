@@ -680,7 +680,7 @@ struct BoltValue
         return v;
     } // end Make_String
 
-    //===============================================================================|
+    
     /**
      * @brief factory for hetero-lists (lazy decoding style)
      * 
@@ -699,7 +699,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
-    //===============================================================================|
+    
     /**
      * @brief factory for hetero-lists (lazy decoding style)
      *  with a size hint.
@@ -716,7 +716,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
-    //===============================================================================|
+    
     /**
      * @brief factory for maps
      * 
@@ -736,7 +736,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
-    //===============================================================================|
+    
     /**
      * @brief factory for maps
      * 
@@ -754,7 +754,7 @@ struct BoltValue
         return v;
     } // end Make_List
 
-    //===============================================================================|
+    
     /**
      * @brief factory of structs
      * 

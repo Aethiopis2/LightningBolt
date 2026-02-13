@@ -27,8 +27,9 @@
  * @param con_string the connection string to connect to neo4j server
  */
 NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
-	: connection(urls, pauth, pextras), running(false), twait(true),
-	esleep(false), dsleep(false) {
+	: connection(urls, pauth, pextras), running(false),
+	esleep(false), dsleep(false), try_count(0), max_tries(5)
+{
 } // end NeoCell
 
 
@@ -52,10 +53,14 @@ NeoCell::~NeoCell()
  *
  * @return 0 on success. -1 on sys error, -2 app speific error s.a version not supported
  */
-int NeoCell::Start(const int id)
+LBStatus NeoCell::Start(const int id)
 {
-	if (int ret; (ret = connection.Init(id)) < 0)
-		return ret;
+	LBStatus rc = connection.Init(id);
+	if (!LB_OK(rc))
+	{
+		//LB_Handle_Status(rc, this);
+		return rc;
+	} // end if
 
 	EWake();
 	Set_Running(true);
@@ -63,8 +68,20 @@ int NeoCell::Start(const int id)
 	decoder_thread = std::thread(&NeoCell::Decoder_Loop, this);
 
 	// wait for result
-	Wait_Task();
-	return read_ret;	// should be ready
+	connection.Wait_Task();
+
+	// check decoded value
+	auto task = connection.tasks.Dequeue();
+	if (task.has_value())
+	{
+		if (task->result.Success())
+		{
+			last_error = task->result.error.ToString();
+			return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_NEO4J);
+		} // end if failed
+	} // end if
+
+	return rc;	// should be ready
 } // end Start
 
 
@@ -95,7 +112,7 @@ int NeoCell::Enqueue_Request(CellCommand&& cmd)
 int NeoCell::Fetch(BoltResult& results)
 {
 	// wait for at least one full message
-	Wait_Task();
+	connection.Wait_Task();
 
 	if (read_ret < 0)
 		return read_ret;
@@ -122,12 +139,21 @@ int NeoCell::Get_Socket() const
 
 
 /**
- * @brief returns the last error string from the active connection
+ * @brief returns the number of connection attempts made so far
  */
-std::string NeoCell::Get_Last_Error() const
+int NeoCell::Get_Try_Count() const
 {
-	return connection.Get_Last_Error();
-} // end Get_Last_Error
+	return try_count;
+} // end Get_Try_Count
+
+
+/**
+ * @brief returns the maximum retry count allowed
+ */
+int NeoCell::Get_Max_Try_Count() const
+{
+	return max_tries;
+} // end Get_Max_Try_Count
 
 
 /**
@@ -135,8 +161,43 @@ std::string NeoCell::Get_Last_Error() const
  */
 bool NeoCell::Is_Connected() const
 {
-	return !connection.Is_Closed();
+	return connection.Is_Open();
 } // end Is_Connected
+
+
+/**
+ * @brief returns a human readable string version of last error encountered
+ *	usually from Neo4j bolt side.
+ */
+std::string NeoCell::Get_Last_Error() const
+{
+	return last_error;
+} // end Get_Last_Error
+
+
+/**
+ * @brief increments the try count for connection attempts
+ */
+bool NeoCell::Can_Retry()
+{
+	if (++try_count > max_tries)
+	{
+		try_count = 0;		// reset it
+		return false;
+	} // end if not anymore
+
+	return true;	// yes you can
+} // end Increment_Try_Count
+
+
+/**
+ * @brief sets the maximum retry count to the number, n greater than 0
+ */
+void NeoCell::Set_Retry_Count(const int n)
+{
+	if (n > 0)
+		max_tries = n;
+} // end Set_Retry_Count
 
 
 /**
@@ -144,7 +205,7 @@ bool NeoCell::Is_Connected() const
  */
 void NeoCell::Stop()
 {
-	if (connection.Is_Closed())
+	if (!connection.Is_Open())
 		return;
 
 	if (connection.supported_version.major >= 5)
@@ -152,8 +213,9 @@ void NeoCell::Stop()
 
 	// drain all requrests before terminating
 	do {
-		Wait_Task();
-	} while (!connection.tasks.Is_Empty() || !equeue.Is_Empty());
+		connection.Wait_Task();
+		connection.tasks.Dequeue();
+	} while (!connection.tasks.Is_Empty());
 
 	connection.Terminate();
 	Set_Running(false);
@@ -162,6 +224,7 @@ void NeoCell::Stop()
 	if (encoder_thread.joinable())
 		encoder_thread.join();
 
+	DWake();
 	if (decoder_thread.joinable())
 		decoder_thread.join();
 } // end Stop
@@ -206,7 +269,7 @@ void NeoCell::Encoder_Loop()
 					break;
 
 				default:
-					connection.err_string = "Encoder loop, command violation. Aborted thread.";
+					//connection.err_string = "Encoder loop, command violation. Aborted thread.";
 					write_ret = -2;		// critical violation
 				} // end switch
 
@@ -238,28 +301,25 @@ void NeoCell::Decoder_Loop()
 	bool has_more = false;	// used to indicate if we need to poll more
 	while (Is_Running())
 	{
-		if (!connection.tasks.Is_Empty() || !equeue.Is_Empty() || has_more)
+		if (!connection.tasks.Is_Empty() || has_more)
 		{
-			if ((read_ret = connection.Poll_Readable()) < 0)
+			LBStatus rc = connection.Poll_Readable();
+			if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
 			{
 				if (read_ret >= -2)
 				{
 					Set_Running(false);
-					twait.store(false, std::memory_order_release);
-					twait.notify_one();
 					EWake();
 					break;
 				} // end if fatal
 			} // end if readable
-			else if (read_ret > 0)
+			else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
 			{
 				has_more = true;
 				continue;
 			} // end else waiting for more
 
 			has_more = false;
-			twait.store(false, std::memory_order_release);
-			twait.notify_one();
 		} // end if
 		else
 		{
@@ -273,8 +333,7 @@ void NeoCell::Decoder_Loop()
 /**
  * @brief wakes a sleeping thread if 'equeue' encoder queue size is exactly 1
  *	or the first element, i.e. simulates waking on first message arrival after
- *	idle periods. Less than equal to 1 helps here because I want to wake a
- *	sleeping encoder thread during exits.
+ *	idle periods.
  */
 void NeoCell::EWake()
 {
@@ -282,7 +341,6 @@ void NeoCell::EWake()
 	if (equeue.Size() <= 1)
 	{
 		esleep.notify_one();		// wake the encoder thread if sleeping
-		DWake();		// since tied to it, wake decoder too
 	} // end equeue
 } // end  Toggle_ESleep
 
@@ -315,28 +373,6 @@ void NeoCell::Sleep(std::atomic<bool>& ws)
 		ws.wait(bsleep);
 	} // end while
 } // end Sleep_Encoder
-
-
-/**
- * @brief causes a thread to wait for a decoder task to be ready, signaled when
- *	deocder thread returns 0 from 'Connection::Poll_Readable' to imply complete
- *	message recieved. It resets the value upon exit from the loop to make sure
- *	the next process waits for the next task decoding completion as expected.
- */
-void NeoCell::Wait_Task()
-{
-	while (Is_Running())
-	{
-		bool bwait = twait.load(std::memory_order_acquire);
-		if (!bwait)
-			break;	// wait no more
-
-		twait.wait(bwait);	 // task is not ready, we wait
-	} // end while
-
-	// reset it
-	twait.store(true, std::memory_order_release);
-} // end Block_Until
 
 
 /**

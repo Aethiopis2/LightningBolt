@@ -1,14 +1,9 @@
 /**
- * @file bolt_decoder.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
- * @brief Defintion of BoltDecoder object
- * 
  * @version 1.0
- * @date 13th of April 2025, Sunday.
- * 
- * @copyright Copyright (c) 2025
- * 
+ * @date created 13th of April 2025, Sunday.
+ * @date updated 9th of Feburary 2026, Monday.
  */
 #pragma once
 
@@ -17,12 +12,10 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
+#include "neoerr.h"
 #include "bolt/bolt_buf.h"
 #include "bolt/bolt_message.h"
-#include "bolt/boltvalue_pool.h"
 #include "bolt/bolt_jump_table.h"
-#include "utils/utils.h"
-#include "utils/errors.h"
 
 
 
@@ -43,13 +36,23 @@
  */
 class BoltDecoder
 {
-friend class BoltValue;
+    friend class BoltValue;
 
 public:
 
     BoltDecoder(BoltBuf &b) : buf(b) {}
 
-    void Decode(BoltValue &out)
+    /**
+	 * @brief decode's objects according to bolt protocol and returns
+	 *  the decoded value via out parameter.
+     * 
+	 * @param out reference to output decoded value
+     * 
+	 * @note testing purpose only, use Decode(u8* view_start, BoltMessage &out)
+     * @returns LB_OK_INFO containing the number of bytes decoded or fail as protocol
+     *  violation.
+	 */
+    LBStatus Decode(BoltValue &out)
     {
 		out.buf = &buf;
         u8* start_pos = buf.Read_Ptr();
@@ -59,19 +62,28 @@ public:
         while (size > pos - start_pos) 
         {
             u8 tag = *pos;
-            jump_table[tag](pos, out);
-            if (out.type == BoltType::Unk)
-            {
-                Dump_Err("Unkown type decoded.");
-                return;
-            } // end if
+            if (!jump_table[tag](pos, out))    
+                return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
+                    LBCode::LB_CODE_PROTO);
         } // end while
         
         buf.Consume(size);
+        return LB_OK_INFO(size);
     } // end Decode
 
 
-    int Decode(u8* view_start, BoltValue& v)
+    /**
+	 * @brief Decodes a bolt value from a given view pointer, usually this is
+     *  from the recv buffer. 
+     * 
+	 * @param view_start pointer to the start of the view
+	 * @param v reference to output decoded value
+     * 
+	 * @deprecated use Decode(u8* view_start, BoltMessage &out)
+     * @returns LB_OK_INFO containing the number of bytes decoded or fail as protocol
+     *  violation.
+	 */ 
+    LBStatus Decode(u8* view_start, BoltValue& v)
     {
 		v.buf = &buf;
         u16 chunk = *((u16*)view_start);
@@ -82,23 +94,27 @@ public:
         {
             u8 tag = *pos;
             if (!jump_table[tag](pos, v))
-            {
-                error_string = "Unexpected tag: " + std::to_string(tag);
                 return -1;
-            } // end if
         } // end while
 
         u32 consumed = chunk_size + 2;
         if (*(u16*)(pos) == 0x00)
             consumed += 2;
 
-        return consumed;
+        return LB_OK_INFO(consumed);
     } // end Decode
     
+
     /**
+	 * @brief decode's a bolt message from the internal buffer
      * 
+	 * @param msg reference to output decoded message
+     * 
+	 * @deprecated use overloaded Decode with view pointer
+     * @returns LB_OK_INFO containing the number of bytes decoded or fail as protocol
+     *  violation.
      */
-    void Decode(BoltMessage& msg)
+    LBStatus Decode(BoltMessage& msg)
     {
 		msg.msg.buf = &buf;
         u16 chunk = *((u16*)buf.Read_Ptr());
@@ -110,20 +126,32 @@ public:
         while (msg.chunk_size > (pos - start))
         {
             u8 tag = *pos;
-            jump_table[tag](pos, msg.msg);
+            if (!jump_table[tag](pos, msg.msg))
+                return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
+                    LBCode::LB_CODE_PROTO);
         } // end while
         
+
         if (*(u16*)(buf.Read_Ptr()) == 0x00)
-            buf.Consume(2 + msg.chunk_size);
-        else 
-            buf.Consume(msg.chunk_size);
+            msg.chunk_size += 2;
+      
+        buf.Consume(msg.chunk_size);
+        return LB_OK_INFO(msg.chunk_size);
     } // end Decode overloaded
 
 
-    /**
-     * 
+   /**
+     * @brief Decodes a bolt message from a given view pointer, usually this is
+     *  the recv buffer. The function does not partial decode and expects the
+     *  caller to make sure buffer is pointing at a full bolt message.
+     *
+     * @param view_start pointer to the start of the view
+     * @param msg reference to output decoded message
+     *
+     * @returns LB_OK_INFO containing the number of bytes decoded or fail as protocol
+     *  violation.
      */
-    int Decode(u8* view_start, BoltMessage &msg)
+    LBStatus Decode(u8* view_start, BoltMessage &msg)
     {
 		msg.msg.buf = &buf;
         u16 chunk = *((u16*)view_start);
@@ -134,30 +162,18 @@ public:
         {
             u8 tag = *pos;
             if (!jump_table[tag](pos, msg.msg))
-            {
-                error_string = "Unexpected tag: " + std::to_string(tag);
-                return -1;
-            } // end if
+                return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
+                    LBCode::LB_CODE_PROTO);
         } // end while
 
         u32 consumed = msg.chunk_size + 2;
         if (*(u16*)(pos) == 0x00)
             consumed += 2;
 
-        return consumed;
+        return LB_OK_INFO(consumed);
     } // end Decode overloaded
-
-    /**
-     * @brief returns a string representaion of the last
-     *  decoding error encountered
-     */
-    std::string Get_Last_Error() const 
-    {
-        return error_string;
-    } // end Get_Last_Error
 
 private:
 
-    BoltBuf &buf;
-    std::string error_string;
+    BoltBuf& buf;
 }; 

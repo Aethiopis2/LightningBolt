@@ -3,7 +3,7 @@
  * 
  * @version 2.0
  * @date created 9th of April 2025, Wednesday
- * @date updated 21st of January 2026, Wednesday
+ * @date updated 10th of Feburary 2026, Tuesday
  */
 #pragma once
 
@@ -14,8 +14,8 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
-#include "basics.h"
-#include <openssl/ssl.h>   // Correct header for OpenSSL SSL functionality
+#include "neoerr.h"
+#include <openssl/ssl.h>  
 #include <openssl/err.h>
 
 
@@ -39,15 +39,6 @@
 #define SA              struct sockaddr     /* short hand notation for socket address structures */
 
 
-// return codes for TcpClient methods
-#define TCP_SUCCESS        0               /* success */
-#define TCP_ERROR         -1               /* generic system call error */
-#define TCP_TRYAGAIN      -4               /* try again later */
-#define TCP_ERROR_SSL     -5               /* ssl related error */
-#define TCP_ERROR_CLOSED  -6               /* connection closed by peer */
-
-
-
 //===============================================================================|
 //          CLASS
 //===============================================================================|
@@ -61,33 +52,31 @@ class TcpClient
 public:
 
     TcpClient();      // default
-    TcpClient(const std::string &host, const std::string &port, bool ssl = false);
+    TcpClient(const std::string &host, const std::string &port, 
+        bool ssl = false);
     virtual ~TcpClient();
 
-    virtual bool Is_Closed() const = 0;
-
-    // commons 
-    int Connect();
-    int Init_SSL();
-    int SSL_Connect();
-
-    int Send(const void* buf, size_t len);
-    int Recv(void* buf, size_t len);
-
-    struct pollfd Get_Pollfd() const;
     int Get_Socket() const;
-    int Set_NonBlock();
 
+    bool Is_Open() const;
+    bool Enable_Keepalive(const int idle_sec = 5,
+        const int interval_sec = 2,
+        const int count = 5);
+
+    void Enable_SSL();
+    void Enable_NonBlock();
     void Disconnect();
-    void Shutdown_SSL();
-	void Enable_SSL();
+
+    LBStatus Connect();
+    LBStatus Send(const void* buf, const int len);
+    LBStatus Recv(void* buf, const int len);
 
 protected:
 
     int fd;                         // a socket descriptor
+    bool is_open;                   // connection flag
 	bool ssl_enabled;               // ssl flag
     std::string hostname, port;     // the host and port num
-	std::string str_err;            // holds the last error string
     struct addrinfo *paddr;         // holds the remote address info
 
     // ssl stuff
@@ -97,19 +86,23 @@ protected:
 private:
 
 	// function pointers for polymorphic behavior
-    using Send_Fn_Ptr = int (TcpClient::*)(const void*, size_t);
-	using Recv_Fn_Ptr = int (TcpClient::*)(void*, size_t);
+    using Send_Fn_Ptr = LBStatus (TcpClient::*)(const void*, const int);
+	using Recv_Fn_Ptr = LBStatus (TcpClient::*)(void*, const int);
     
 	Send_Fn_Ptr pSend;
 	Recv_Fn_Ptr pRecv;
 
     // utils
-    int Fill_Addr();
+    void Shutdown_SSL();
 
-    int Send_Tcp(const void* buf, size_t len);
-	int Recv_Tcp(void* buf, size_t len);
-    int Send_Tcp_NonBlock(const void* buf, size_t len);
-	int Recv_Tcp_NonBlock(void* buf, size_t len);
-	int SSL_Send(const void* buf, size_t len);
-	int SSL_Recv(void* buf, size_t len);
+    LBStatus Fill_Addr();
+    LBStatus Init_SSL();
+    LBStatus SSL_Connect();
+
+    LBStatus Send_Tcp(const void* buf, const int len);
+	LBStatus Recv_Tcp(void* buf, const int len);
+    LBStatus Send_Tcp_NonBlock(const void* buf, const int len);
+	LBStatus Recv_Tcp_NonBlock(void* buf, const int len);
+	LBStatus SSL_Send(const void* buf, const int len);
+	LBStatus SSL_Recv(void* buf, const int len);
 };

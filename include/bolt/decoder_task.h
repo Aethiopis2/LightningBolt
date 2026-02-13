@@ -59,11 +59,17 @@ struct BoltResult
 {
     BoltMessage fields;     // the field names for the record
     std::vector<BoltValue> records;      // the actual list of records returned
+    BoltMessage record;     // a single bolt record
     BoltMessage summary;    // the summary message at end of records
     BoltValue error = BoltValue::Make_Unknown();        // used when error occurs
     int messages{ 0 };      // count of messages contained within records
 
     int client_id = 0;
+
+    bool Success() const
+    {
+        return error.type != BoltType::Unk;
+    } // end successul
 };
 
 
@@ -183,7 +189,9 @@ struct DecoderTask
     QueryState state;       // current state of the query
     BoltView view;          // view into the buffer for this query
     BoltResult result;      // results of bolt values
-    ConnectionStat stat;    // connection stats (timers and stuff)
+    ConnectionStat latency; // latency stats
+
+    int total_bytes{ 0 };   // total bytes recvd
 
     std::function<void(BoltResult&)> cb = nullptr;  // a callback for async procs ideal for web apps.
 };
