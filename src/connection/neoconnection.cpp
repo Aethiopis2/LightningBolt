@@ -620,36 +620,23 @@ LBStatus NeoConnection::Poll_Readable()
 
     int bytes = LB_Aux(rc);
     read_buf.Advance(bytes);
-    std::cout << "Received/Advanced: " <<  bytes << std::endl;
+    bytes += prev_remaining;
+    prev_remaining = 0;
 
     // if data is completely received push to response handler
     rc = Decode_Response(read_buf.Read_Ptr(), bytes);
     if (!LB_OK(rc))
     {
         if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
-			read_buf.Consume(LB_Aux(rc));
+        {
+            prev_remaining = bytes - LB_Aux(rc);
+            read_buf.Consume(LB_Aux(rc));
+		} // end if has more
 		
         return rc;
     } // end if
 
-    std::cout << "Decoded/Consumed: " << LB_Aux(rc)  << std::endl;
     read_buf.Consume(LB_Aux(rc));
-
-    std::cout << "Pointers: w - r: " << (int*)read_buf.Write_Ptr() 
-        << " - " << (int*)read_buf.Read_Ptr() << std::endl;
-    //rc = Recv_Completed(read_buf.Read_Ptr(), bytes);
-    //if (LB_OK(rc))
-    //{
-    //    int stream_bytes = LB_Aux(rc);
-    //    rc = Decode_Response(read_buf.Read_Ptr(), stream_bytes);
-    //    if (!LB_OK(rc))
-    //    {
-    //        return rc;
-    //    } // end if
-
-    //    read_buf.Consume(stream_bytes);
-    //} // end if complete
-
     return LB_Make();
 } // end Poll_Readable
 
@@ -667,8 +654,7 @@ LBStatus NeoConnection::Can_Decode(u8* view, const u32 bytes_remain)
 	u16 temp, msg_len = 0;  // vars
 
     if (bytes_remain <= 4)
-        return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
-			LBCode::LB_CODE_NONE, 0);   // didn't even get the header, bolt in practice has a min of 7
+        return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT);   // didn't even get the header, bolt in practice has a min of 7
 
 	// get the message size from the header
     memcpy(&temp, view, sizeof(u16));
@@ -681,8 +667,7 @@ LBStatus NeoConnection::Can_Decode(u8* view, const u32 bytes_remain)
             msg_len += 2;
     } // end if enough bytes for padding too
     else
-        return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
-            LBCode::LB_CODE_NONE, bytes_remain);
+        return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT);
 
     // sweet, now make sure this is a proper bolt packet by
 	//  checking the signature byte, if not then it's a protocol error
@@ -703,7 +688,7 @@ LBStatus NeoConnection::Can_Decode(u8* view, const u32 bytes_remain)
  */
 LBStatus NeoConnection::Decode_Response(u8* view, const u32 bytes)
 {
-    Utils::Dump_Hex((const char*)view, bytes);
+    //Utils::Dump_Hex((const char*)view, bytes);
     size_t decoded = 0; // tacks decoded bytes thus far
     LBStatus rc = 0;    // holds return values
 
@@ -712,6 +697,12 @@ LBStatus NeoConnection::Decode_Response(u8* view, const u32 bytes)
 		rc = Can_Decode(view, bytes - decoded);
         if (!LB_OK(rc))
         {
+            if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
+            {
+                return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
+                    LBCode::LB_CODE_NONE, decoded);
+			} // end if protocol error
+
             return rc; 
 		} // end if can't decode
 
@@ -754,9 +745,6 @@ LBStatus NeoConnection::Decode_Response(u8* view, const u32 bytes)
 		int decoded_bytes = LB_Aux(rc);
         view += decoded_bytes;
         decoded += decoded_bytes;
-
-        std::cout << "Decoded bytes: " << decoded << std::endl;
-        std::cout << "Remaining bytes: " << (bytes - decoded) << std::endl;
     } // end while
 
     return LB_OK_INFO(decoded);
@@ -1136,8 +1124,6 @@ inline LBStatus NeoConnection::Success_Run(DecoderTask& task)
  */
 inline LBStatus NeoConnection::Success_Record(DecoderTask& task)
 {
-	//Utils::Dump_Hex((const char*)task.view.cursor, task.view.size);
-
     LBStatus rc = decoder.Decode(task.view.cursor, task.result.summary);
     if (!LB_OK(rc))
         return rc;

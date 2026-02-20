@@ -32,9 +32,9 @@ void FetchCallbackFn(BoltResult& res)
 {
     /*std::cout << "=======================\n";
       std::cout << "thread id: " << res.client_id << "\n";*/
-    for (auto v : res)
-        Utils::Print("Records: %s", v.ToString().c_str());
-    //std::cout << "=======================\n";
+      for (auto v : res);
+        /*Utils::Print("Records: %s", v.ToString().c_str());
+    std::cout << "=======================\n";*/
 
     records.fetch_add(static_cast<int>(res.message_count), std::memory_order_relaxed);
     completed.fetch_add(1, std::memory_order_relaxed);
@@ -45,27 +45,18 @@ int main()
 {
     constexpr int QUERY_COUNT = 1000;
     std::string url = "bolt://localhost:7687";
-    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
+    BoltValue basic = Auth::Basic("neo4j", "");
 
     NeoDriver driver(url, basic, BoltValue::Make_Map(), 1);
 
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int i = 0; i < QUERY_COUNT; ++i) {
-		driver.Execute_Async("UNWIND range(1,100) AS n RETURN n", FetchCallbackFn);
-        /*NeoCell* pcell = driver.Get_Session();
-
-        {
-            CellCommand cmd;
-            cmd.type = CellCmdType::Run;
-            cmd.cypher = "UNWIND range(1,100) AS n RETURN n";
-            cmd.params = BoltValue::Make_Map();
-            cmd.extras = BoltValue::Make_Map();
-            cmd.cb = FetchCallbackFn;
-            pcell->Enqueue_Request(std::move(cmd));
-        }*/
-    }
+    for (int i = 0; i < QUERY_COUNT; ++i) 
+		driver.Execute_Async(
+            "UNWIND range(1,100) AS n RETURN n", 
+            FetchCallbackFn
+        );
 
     while (completed.load() < QUERY_COUNT)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

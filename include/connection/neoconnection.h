@@ -103,6 +103,8 @@ private:
 
     int client_id;          // connection identifier
     int tran_count;		    // number of transactions executed; simulates nesting
+    int prev_remaining = 0;
+
     std::atomic<bool> is_done;  // determines if the next decoding batch is done
 
     LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses

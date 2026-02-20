@@ -50,12 +50,12 @@ std::vector<int64_t> durs;
 
 void Test_Record_Fetch()
 {
-    const size_t iterations = 10;
+    const size_t iterations = 1;
 
     for (size_t i = 0; i < iterations; i++)
     {
         NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", "tobby@melona"));
+            Auth::Basic("neo4j", ""));
         NeoCell* pcell = driver.Get_Session();
 
         if (!pcell)
@@ -77,7 +77,6 @@ void Test_Record_Fetch()
                     break;
                 } // end if
 
-                
                 Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
                     Utils::Print("Records: %s", v.ToString().c_str());

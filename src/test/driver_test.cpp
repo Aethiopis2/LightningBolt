@@ -25,7 +25,7 @@ static std::atomic<int> records{ 0 };
 int main()
 {
     // 1. start driver
-	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", "tobby@melona"));
+	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", ""));
     
 	BoltResult result;
     driver.Execute_Async("MATCH (n) RETURN n LIMIT 1000",

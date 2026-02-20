@@ -342,21 +342,14 @@ void NeoCell::Decoder_Loop()
 				has_more = true;
 				continue;
 			} // end else waiting for more
-
+	
 			has_more = false;
-
 			if (connection.tasks.Is_Empty() && connection.results.Is_Empty())
 			{
 				connection.read_buf.Reset();    // reset buffer if no more tasks
 			} // end if no more tasks
 		} // end if
-		else
-		{
-			//if (!dsleep.load(std::memory_order_acquire))
-			{
-				Sleep(dsleep);
-			} // end if sleeping
-		} // end else no more tasks, sleep it out
+		//else Sleep(dsleep);	// wait it out till notified.
 	} // end while running
 
 	// on abnormal exit, handle it
