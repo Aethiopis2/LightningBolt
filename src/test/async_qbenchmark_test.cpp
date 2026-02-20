@@ -15,7 +15,9 @@
  //          INCLUDES
  //===============================================================================|
 #include <chrono>
-#include "neopool.h"
+#include "neodriver.h"
+#include "utils/errors.h"
+#include "utils/utils.h"
 using namespace std;
 
 
@@ -30,11 +32,11 @@ void FetchCallbackFn(BoltResult& res)
 {
     /*std::cout << "=======================\n";
       std::cout << "thread id: " << res.client_id << "\n";*/
-    for (auto& v : res.records);
-    //Utils::Print("Records: %s", v.ToString().c_str());
+    for (auto v : res)
+        Utils::Print("Records: %s", v.ToString().c_str());
     //std::cout << "=======================\n";
 
-    records.fetch_add(static_cast<int>(res.records.size()), std::memory_order_relaxed);
+    records.fetch_add(static_cast<int>(res.message_count), std::memory_order_relaxed);
     completed.fetch_add(1, std::memory_order_relaxed);
 } // end FetchCallbackFn
 
@@ -45,16 +47,14 @@ int main()
     std::string url = "bolt://localhost:7687";
     BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
 
-    NeoCellPool pool(4, url, &basic);
-    if (pool.Start(true) < 0)
-    {
-        Dump_Err_Exit("Failed to start connection pool");
-    }
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 1);
+
 
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) {
-        NeoCell* cell = pool.Acquire();
+		driver.Execute_Async("UNWIND range(1,100) AS n RETURN n", FetchCallbackFn);
+        /*NeoCell* pcell = driver.Get_Session();
 
         {
             CellCommand cmd;
@@ -63,15 +63,15 @@ int main()
             cmd.params = BoltValue::Make_Map();
             cmd.extras = BoltValue::Make_Map();
             cmd.cb = FetchCallbackFn;
-            cell->Enqueue_Request(std::move(cmd));
-        }
+            pcell->Enqueue_Request(std::move(cmd));
+        }*/
     }
 
     while (completed.load() < QUERY_COUNT)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     auto end = std::chrono::high_resolution_clock::now();
-    pool.Stop();
+    driver.Close();
 
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 

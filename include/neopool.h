@@ -34,7 +34,7 @@ public:
 		BoltValue* pauth, 
 		BoltValue* pextras = nullptr);
 
-	int Start(const bool all_connections = false);
+	LBStatus Start(const bool all_connections = false);
 	void Stop();
 	NeoCell* Acquire();
 	const std::vector<std::unique_ptr<NeoCell>>& Workers() const;

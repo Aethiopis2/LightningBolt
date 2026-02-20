@@ -37,25 +37,15 @@ struct BoltMessage
     u16 padding{0};
 
     BoltMessage() = default;
-    //BoltMessage(BoltValue &val) : msg(val) {}
-    BoltMessage(BoltValue val) : msg(val) {}
-    //~BoltMessage() = default;
+    BoltMessage(BoltValue val) : msg(std::move(val)) {}
 
     std::string ToString() const
     {
         return msg.ToString();
     } // end ToString
-    
-    // void Set_Message(u8 signature, BoltValue *val)
-    // {
-    //     tag = signature;
-    //     msg = val;
-    // } // end Set_Message
 
-    // bool Is_Success() const { return tag == 0x70; }
-    // bool Is_Failure() const { return tag == 0x7E; }
-    // bool Is_Record() const { return tag == 0x71; }
-    // bool Is_Ignored() const { return tag == 0x7E; }
-
-    // //std::string Debug_Str() const;      // for logging
+    bool Success() const { return msg.type == BoltType::Struct && msg.struct_val.tag == BOLT_SUCCESS; }
+    bool Failure() const { return msg.struct_val.tag == BOLT_FAILURE; }
+    bool Record() const { return msg.struct_val.tag == BOLT_RECORD; }
+    bool Ignored() const { return msg.struct_val.tag == BOLT_IGNORED; }
 };

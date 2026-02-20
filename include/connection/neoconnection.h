@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 9th of April 2025, Wednesday
- * @date updated 18th of January 2026, Sunday
+ * @date updated 15th of Feburary 2026, Sunday
  */
 #pragma once
 
@@ -16,6 +16,7 @@
 #include "bolt/bolt_encoder.h"
 #include "bolt/decoder_task.h"
 #include "utils/lock_free_queue.h"
+#include "utils/red_stats.h"
 
 
 
@@ -59,7 +60,6 @@ class NeoCell;
  */
 class NeoConnection : public TcpClient
 {
-    //friend void LB_Handle_Status(LBStatus, NeoCell*);
     friend class NeoCell;
 
 public:
@@ -72,7 +72,6 @@ public:
     int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
         BoltValue extras = BoltValue::Make_Map(), const int chunks = -1,
         std::function<void(BoltResult&)> rscb = nullptr);
-    int Fetch(BoltMessage& out);
 
     int Begin(const BoltValue& options = BoltValue::Make_Map());
     int Commit(const BoltValue& options = BoltValue::Make_Map());
@@ -105,7 +104,6 @@ private:
     int client_id;          // connection identifier
     int tran_count;		    // number of transactions executed; simulates nesting
     std::atomic<bool> is_done;  // determines if the next decoding batch is done
-    size_t bytes_recvd;     // helper that store's the number of bytes to decode
 
     LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses
     LockFreeQueue<BoltResult> results;      // queue of query reults decoded
@@ -118,19 +116,21 @@ private:
     BoltEncoder encoder;
     BoltDecoder decoder;
 
+    LatencyHistogram latencies;
+
 
     //====================
     // utilities
     //====================
     LBStatus Poll_Writable();
     LBStatus Poll_Readable();
-    LBStatus Decode_Response(u8* view, const size_t bytes);
+    LBStatus Can_Decode(u8* view, const u32 bytes_remain);
+    LBStatus Decode_Response(u8* view, const u32 bytes);
     int Get_Client_ID() const;
     LBStatus Send_Hellov5();
     LBStatus Send_Hellov4();
     LBStatus Flush();
 
-    bool Recv_Completed();
     bool Is_Record_Done(DecoderTask& v);
     bool Encode_And_Flush(QueryState s, BoltMessage& v);
     LBStatus Negotiate_Version();

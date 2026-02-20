@@ -1,14 +1,9 @@
 /**
- * @file bolt_buf.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
- * 
- * @brief Defintion of a buffer used for high speed bolt encoding/decoding operaton
- * 
+ *
  * @version 1.0
- * @date 15th of April 2025, Tuesday.
- * 
- * @copyright Copyright (c) 2025
- * 
+ * @date created 15th of April 2025, Tuesday.
+ * @date updated 20th of Feburary 2026, Friday.
  */
 #pragma once
 
@@ -76,7 +71,7 @@ struct BufferStats
     static constexpr double grow_threshold = 0.8;
     static constexpr double shrink_theshold = 0.8;
 
-    //===============================================================================|
+    
     /**
      * @brief computes the next Exponential Moving Average with pre-kooked constant
      *  values for better estimation of buffer growth.
@@ -87,7 +82,7 @@ struct BufferStats
         ema_recv = alpha * bytes_this_cycle + (1 - alpha) * ema_recv;
     } // end Update
 
-    //===============================================================================|
+    
     /**
 	 * @brief determines if buffer should grow based on recent traffic
      */
@@ -96,7 +91,7 @@ struct BufferStats
         return ema_recv > capacity * grow_threshold;
     } // end Should_Grow
 
-    //===============================================================================|
+    
     /**
      * @brief determines if buffer should shrink based on recent traffic
 	 */
@@ -129,6 +124,7 @@ public:
     BoltBuf(BoltBuf&&) noexcept = default;
     BoltBuf& operator=(BoltBuf&&) noexcept = default;
 
+    
     //===============================================================================|
     /**
      * @brief return's the head of the write ptr
@@ -139,7 +135,7 @@ public:
         return data + write_offset;
     } // end Write_Ptr
 
-    //===============================================================================|
+    
     /**
      * @brief return's the head of the read ptr
      */
@@ -149,7 +145,7 @@ public:
         return data + read_offset;
     } // end Read_Ptr
 
-    //===============================================================================|
+    
     /**
      * @brief shifts the write pointer n bytes forwards
      * 
@@ -161,7 +157,7 @@ public:
         assert(write_offset <= capacity);
     } // end Advance
 
-    //===============================================================================|
+    
     /**
      * @brief notifies read_offset the number of bytes consumed
      * 
@@ -173,7 +169,7 @@ public:
         assert(read_offset <= capacity);    /* convert to something less firghtnening in production */
     } // end Consume
 
-    //===============================================================================|
+    
     /**
      * @brief reset's the reading/writing offsets to 0
      */
@@ -182,7 +178,7 @@ public:
         read_offset = write_offset = 0;
     } // end Reset
 
-    //===============================================================================|
+    
     /**
      * @brief reset's the read head to 0.
      */
@@ -191,7 +187,7 @@ public:
         read_offset = 0;
     } // end Reset_Read
     
-    //===============================================================================|
+    
     /**
      * @brief return's the bytes contained in the buffer ready for processing
      */
@@ -200,7 +196,7 @@ public:
         return write_offset - read_offset;
     } // end Size
 
-    //===============================================================================|
+    
     /**
      * @brief return's the storage capacity
      */
@@ -209,7 +205,7 @@ public:
         return capacity;
     } // end Capacity
 
-    //===============================================================================|
+    
     /**
      * @brief return's true if buffer is empty
      */
@@ -218,7 +214,7 @@ public:
         return (write_offset - read_offset) == 0;
     } // end Empy
 
-    //===============================================================================|
+    
     /**
      * @brief return's a pointer to data
      */
@@ -227,7 +223,7 @@ public:
         return data;
     } // end Data 
 
-    //===============================================================================|
+    
     /**
      * @brief writes the supplied number of bytes into the buffer
      * 
@@ -241,7 +237,7 @@ public:
         write_offset += len;
     } // end Write
 
-    //===============================================================================|
+    
     /**
      * @brief moves the write head forwards/backwards by the number of 
      *  bytes specified in the param
@@ -255,7 +251,7 @@ public:
             write_offset += len;
     } // end Skip
 
-    //===============================================================================|
+    
     /**
      * @brief writes data at a specific position in the buffer
      * 
@@ -269,7 +265,7 @@ public:
             iCpy(&data[pos], ptr, len);
     } // end Write_At
 
-    //===============================================================================|
+    
     /**
 	 * @brief allows growing the buffer based on recent traffic stats or requested 
 	 *  size
@@ -301,7 +297,7 @@ public:
 		return 0;  // success
     } // end Grow
 
-    //===============================================================================|
+    
     /**
      * @brief shrinks the buffer based on recent traffic stats
 	 */
@@ -329,7 +325,7 @@ public:
         read_offset = 0;
     } // end Shrink
 
-    //===============================================================================|
+    
     /**
      * @brief return's the writable size remaining in the buffer
 	 */
@@ -338,7 +334,7 @@ public:
         return capacity - write_offset - TAIL_SIZE;
     } // end Writable_Size
     
-    //===============================================================================|
+    
     /**
      * @brief appends another BoltBuf into this one
      * 
@@ -354,7 +350,7 @@ public:
         write_offset += encoded.Size();
     } // end Append
 
-    //===============================================================================|
+    
     /**
      * @brief Update's the statistics that helps decide buffer grow/shrink
      */
@@ -363,7 +359,7 @@ public:
         stat.Update(this_cycle_bytes);
     } // end Update_Stat
 
-    //===============================================================================|
+    
     /**
      * @brief gets the current write offset
      */
@@ -372,7 +368,7 @@ public:
         return write_offset;
 	} // end Get_Write_Offset
 
-    //===============================================================================|
+    
     /**
      * @brief gets the current read offset
 	 */
@@ -410,7 +406,6 @@ private:
     } // end Try_Grow
 
 
-    //===============================================================================|
     /**
      * @brief ensures there is enough space to write required bytes
      * 

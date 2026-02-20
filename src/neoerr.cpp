@@ -10,9 +10,17 @@
 #include "neoerr.h"
 #include "neocell.h"
 
+static const std::string err_strings[][MAX_CODE]{
+	{ 
+		"Unsupported bolt version negotitated.",
+		"Protocol violation: invalid bolt packet format."
+	}
+};
 
-void LB_Handle_Status(LBStatus status, NeoCell* pcell)
+
+LBStatus LB_Handle_Status(LBStatus status, NeoCell* pcell)
 {
+	LBStatus rc = LB_Make();
 	LBAction action = LBAction(LB_Action(status));
 	LBDomain domain = LBDomain(LB_Domain(status));
 	u16 code = LB_Code(status);
@@ -22,10 +30,13 @@ void LB_Handle_Status(LBStatus status, NeoCell* pcell)
 	case LBAction::LB_OK:
 		break;
 	case LBAction::LB_RETRY:
-		if (!pcell->Can_Retry())
+		if (domain == LBDomain::LB_DOM_SYS)
+		{
+			// kill the cell first and reinvoke it
 			pcell->Stop();
-		else
-			pcell->Start();
+			if (pcell->Can_Retry()) rc = pcell->Start();
+		} // end if system domain retries
+		
 		break;
 	case LBAction::LB_RESET:
 		break;
@@ -37,6 +48,8 @@ void LB_Handle_Status(LBStatus status, NeoCell* pcell)
 	default:
 		break;
 	} // end swtich
+
+	return rc;
 } // end LB_Action_Table
 
 

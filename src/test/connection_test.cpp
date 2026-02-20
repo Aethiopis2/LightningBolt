@@ -40,7 +40,8 @@ int main()
         if (!pcell)
             Fatal("%s", driver.Get_Last_Error().c_str());
 
-        Utils::Print("Connected: %d", (int)(i + 1));
+        Utils::Print("Connected %d times and completed in %ld milliseconds",
+            (int)(i + 1), pcell->Get_Connection_Time());
 
         driver.Close();
         Utils::Print("Disconnected");

@@ -3,7 +3,7 @@
  * 
  * @version 1.0
  * @date created 16th of April 2025, Sunday.
- * @date updated 25th of June 2026, Sunday.
+ * @date updated 18th of Feburary 2026, Wednesday.
  */
 #pragma once
 
@@ -136,7 +136,7 @@ struct BoltValue
     BoltPool<BoltValue>* pool = nullptr;  // pointer to the pool for memory management
     s64 size = 0;               // size it would take to encode this baby on the buffer in bytes
     bool is_decoded = false;
-    u8 padding[2];
+    u8 padding[2]{ 0x00, 0x00 };
 
     union 
     {
@@ -378,12 +378,122 @@ struct BoltValue
         } // end k
     } // end BoltValue
 
+    BoltValue(const BoltValue& other) = default;
+
+    /**
+     * @brief move constructor
+     */
+    BoltValue(BoltValue&& other)
+        : type(other.type), buf(other.buf), pool(other.pool),
+          size(other.size), is_decoded(other.is_decoded)
+    {
+        switch (type)
+        {
+        case BoltType::Bool:
+            bool_val = other.bool_val;
+            break;
+        case BoltType::Int:
+            int_val = other.int_val;
+            break;
+        case BoltType::Float:
+            float_val = other.float_val;
+            break;
+        case BoltType::String:
+            str_val.str = other.str_val.str;
+            str_val.length = other.str_val.length;
+            break;
+        case BoltType::Bytes:
+            byte_val.ptr = other.byte_val.ptr;
+            byte_val.size = other.byte_val.size;
+            break;
+        case BoltType::List:
+            list_val.offset = other.list_val.offset;
+            list_val.size = other.list_val.size;
+            break;
+        case BoltType::Map:
+            map_val.key_offset = other.map_val.key_offset;
+            map_val.value_offset = other.map_val.value_offset;
+            map_val.size = other.map_val.size;
+            break;
+        case BoltType::Struct:
+            struct_val.tag = other.struct_val.tag;
+            struct_val.offset = other.struct_val.offset;
+            struct_val.size = other.struct_val.size;
+            break;
+        default:
+            // For Null, Unk, or any other type, nothing special to copy
+            break;
+        } // end switch
+
+        other.pool = nullptr;   // detach
+        other.type = BoltType::Unk;
+        other.buf = nullptr;
+        other.size = 0;
+        other.is_decoded = false;
+    } // end move
+
 
     /**
      * @brief destructor
      */
     ~BoltValue() { } // end destructor
 
+
+    /**
+     * @brief Copy assignment operator for BoltValue.
+     * Performs a member-wise copy, taking care to copy only the relevant union member
+     * based on the type. This enables assignment like `key[0] = BoltValue(v.first);`.
+     */
+    BoltValue& operator=(const BoltValue& other)
+    {
+        if (this == &other)
+            return *this;
+
+        type = other.type;
+        buf = other.buf;
+        pool = other.pool;
+        size = other.size;
+        is_decoded = other.is_decoded;
+
+        switch (type)
+        {
+        case BoltType::Bool:
+            bool_val = other.bool_val;
+            break;
+        case BoltType::Int:
+            int_val = other.int_val;
+            break;
+        case BoltType::Float:
+            float_val = other.float_val;
+            break;
+        case BoltType::String:
+            str_val.str = other.str_val.str;
+            str_val.length = other.str_val.length;
+            break;
+        case BoltType::Bytes:
+            byte_val.ptr = other.byte_val.ptr;
+            byte_val.size = other.byte_val.size;
+            break;
+        case BoltType::List:
+            list_val.offset = other.list_val.offset;
+            list_val.size = other.list_val.size;
+            break;
+        case BoltType::Map:
+            map_val.key_offset = other.map_val.key_offset;
+            map_val.value_offset = other.map_val.value_offset;
+            map_val.size = other.map_val.size;
+            break;
+        case BoltType::Struct:
+            struct_val.tag = other.struct_val.tag;
+            struct_val.offset = other.struct_val.offset;
+            struct_val.size = other.struct_val.size;
+            break;
+        default:
+            // For Null, Unk, or any other type, nothing special to copy
+            break;
+        }
+        return *this;
+    } // end operator=
     
     /**
      * @brief overloaded brace - () operator for list and struct types
@@ -392,8 +502,8 @@ struct BoltValue
 	 */ 
     BoltValue operator()(const size_t index)
     {
-        size_t size;
         u8* ptr;
+        size_t size = 0;
         size_t offset;
 
         if (type == BoltType::Struct)
@@ -432,7 +542,7 @@ struct BoltValue
                     return BoltValue::Make_Unknown();
                 
                 //std::cout << "alias: " << alias[index].ToString() << '\n';
-                return alias[index];
+                return std::move(alias[index]);
             } // end if pool
             
             //std::cout << "No pool\n";
@@ -475,15 +585,15 @@ struct BoltValue
             } // end if is decoded
             else 
             {
-                auto* k = pool->Get(map_val.key_offset);
-                auto* v = pool->Get(map_val.value_offset);
-
                 for (size_t i = 0; i < map_val.size; i++)
                 {
+                    auto* k = pool->Get(map_val.key_offset);
+                    auto* v = pool->Get(map_val.value_offset);
+
                     if (k[i].str_val.length == length && 
                         !strncmp(k[i].str_val.str, key, length))
                     {
-                        return v[i];
+                        return std::move(v[i]);
                     } // end if
                 } // end for
             } // end else not
@@ -1088,55 +1198,55 @@ struct BoltValue
 			u8* ptr = pval->buf->Data() + pval->struct_val.offset;
             if (pval->struct_val.tag == 0x4E)
             {
-                s += ToString_Node(ptr);
+                s += ToString_Node(ptr, pval->buf);
             } // end else if Node
             else if (pval->struct_val.tag == 0x52)
             {
-                s += ToString_Relationship(ptr);
+                s += ToString_Relationship(ptr, pval->buf);
             } // end else if Relationship
             else if (pval->struct_val.tag == 0x72)
             {
-                s += ToString_Unbound_Relationship(ptr);
+                s += ToString_Unbound_Relationship(ptr, pval->buf);
             } // end else if UnboundRelationship
             else if (pval->struct_val.tag == 0x50)
             {
-                s += ToString_Path(ptr);
+                s += ToString_Path(ptr, pval->buf);
             } // end else if Path
             else if (pval->struct_val.tag == 0x44)
             {
-                s += ToString_Date(ptr);
+                s += ToString_Date(ptr, pval->buf);
             } // end else if Date
             else if (pval->struct_val.tag == 0x54)
             {
-                s += ToString_Time(ptr);
+                s += ToString_Time(ptr, pval->buf);
             } // end else if Time
             else if (pval->struct_val.tag == 0x74)
             {
-                s += ToString_LocalTime(ptr);
+                s += ToString_LocalTime(ptr, pval->buf);
             } // end else if LocalTime
             else if (pval->struct_val.tag == 0x49 || pval->struct_val.tag == 0x46)
             {
-                s += ToString_DateTime(ptr);
+                s += ToString_DateTime(ptr, pval->buf);
             } // end else if DateTime
             else if (pval->struct_val.tag == 0x69 || pval->struct_val.tag == 0x66)
             {
-                s += ToString_DateTimeTimeZoneId(ptr);
+                s += ToString_DateTimeTimeZoneId(ptr, pval->buf);
             } // end else if DateTimeTimeZoneId
             else if (pval->struct_val.tag == 0x64)
             {
-                s += ToString_LocalDateTime(ptr);
+                s += ToString_LocalDateTime(ptr, pval->buf);
             } // end else if LocalDateTime
             else if (pval->struct_val.tag == 0x45)
             {
-                s += ToString_Duration(ptr);
+                s += ToString_Duration(ptr, pval->buf);
             } // end else if Duration
             else if (pval->struct_val.tag == 0x58)
             {
-                s += ToString_Point2D(ptr);
+                s += ToString_Point2D(ptr, pval->buf);
             } // end else if Point2D
             else if (pval->struct_val.tag == 0x59)
             {
-                s += ToString_Point3D(ptr);
+                s += ToString_Point3D(ptr, pval->buf);
             } // end else if Point3D
             else
             {
@@ -1173,13 +1283,17 @@ struct BoltValue
      *  The Node is represented with its ID, labels, properties, and element ID.
      * 
      * @param ptr Pointer to the BoltValue representing the Node.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Node.
      */
-    static std::string ToString_Node(u8*& ptr)
+    static std::string ToString_Node(u8*& ptr, BoltBuf* buf)
     {
-
         BoltValue temp_id, temp_lables, temp_props, temp_elemid;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_id.buf = temp_lables.buf = temp_props.buf = temp_elemid.buf = buf;
+
         std::string s = "Node:{id:";
 
         jump_table[*ptr](ptr, temp_id);         // the  node id
@@ -1200,13 +1314,18 @@ struct BoltValue
      *  properties, element ID, and start/end node element IDs.
      * 
      * @param ptr Pointer to the BoltValue representing the Relationship.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Relationship.
      */
-    static std::string ToString_Relationship(u8*& ptr)
+    static std::string ToString_Relationship(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_id, temp_start, temp_end, temp_type, temp_props, temp_elemid,
             temp_start_elemid, temp_end_elemid;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_id.buf = temp_start.buf = temp_end.buf = temp_type.buf = 
+            temp_props.buf = temp_elemid.buf = temp_start_elemid.buf = temp_end_elemid.buf = buf;
 
         std::string s = "Relationship:{id:";
 
@@ -1237,12 +1356,18 @@ struct BoltValue
      *  properties, and element ID.
      * 
      * @param ptr Pointer to the BoltValue representing the UnboundRelationship.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue UnboundRelationship.
      */
-    static std::string ToString_Unbound_Relationship(u8*& ptr)
+    static std::string ToString_Unbound_Relationship(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_id, temp_type, temp_props, temp_elemid;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_id.buf = temp_type.buf =
+            temp_props.buf = temp_elemid.buf = buf;
+
         std::string s = "UnboundRelationship:{id:";
 
         jump_table[*ptr](ptr, temp_id);         // the relationship id
@@ -1263,12 +1388,17 @@ struct BoltValue
      *  The Path is represented with its nodes, relationships, and indices.
      * 
      * @param ptr Pointer to the BoltValue representing the Path.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Path.
      */
-    static std::string ToString_Path(u8*& ptr)
+    static std::string ToString_Path(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_nodes, temp_rels, temp_index;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_nodes.buf = temp_rels.buf = temp_index.buf = buf;
+
         std::string s = "Path:{nodes:";
 
         jump_table[*ptr](ptr, temp_nodes);      // nodes
@@ -1288,12 +1418,17 @@ struct BoltValue
      *  The Date is represented with its days since epoch Jan 01 1970.
      * 
      * @param ptr Pointer to the BoltValue representing the Date.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Date.
      */
-    static std::string ToString_Date(u8*& ptr)
+    static std::string ToString_Date(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_day;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_day.buf = buf;
+
         std::string s = "Date:{days:";
 
         jump_table[*ptr](ptr, temp_day);        // day
@@ -1308,12 +1443,17 @@ struct BoltValue
      *  The Time is represented with its nanoseconds and timezone offset in seconds.
      * 
      * @param ptr Pointer to the BoltValue representing the Time.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Time.
      */
-    static std::string ToString_Time(u8*& ptr)
+    static std::string ToString_Time(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_nanosecond, temp_offset_second;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_nanosecond.buf = temp_offset_second.buf = buf;
+
         std::string s = "Time:{nanoseconds:";
 
         jump_table[*ptr](ptr, temp_nanosecond);       // hour
@@ -1330,12 +1470,17 @@ struct BoltValue
      *  The LocalTime is represented with its nanoseconds since midnight.
      * 
      * @param ptr Pointer to the BoltValue representing the LocalTime.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue LocalTime.
      */
-    static std::string ToString_LocalTime(u8*& ptr)
+    static std::string ToString_LocalTime(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_nanosecond;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_nanosecond.buf = buf;
+
         std::string s = "LocalTime:{nanoseconds:";
 
         jump_table[*ptr](ptr, temp_nanosecond);       // hour
@@ -1351,12 +1496,17 @@ struct BoltValue
      *  timezone offset in seconds.
      * 
      * @param ptr Pointer to the BoltValue representing the DateTime.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue DateTime.
      */
-    static std::string ToString_DateTime(u8*& ptr)
+    static std::string ToString_DateTime(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_seconds, temp_nanoseconds, temp_offset_seconds;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_seconds.buf = temp_nanoseconds.buf = temp_offset_seconds.buf = buf;
+
         std::string s = "DateTime:{seconds:";
 
         jump_table[*ptr](ptr, temp_seconds);            // date
@@ -1376,12 +1526,17 @@ struct BoltValue
      *  epoch, nanoseconds, and timezone ID.
      * 
      * @param ptr Pointer to the BoltValue representing the DateTimeTimeZoneId.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue DateTimeTimeZoneId.
      */
-    static std::string ToString_DateTimeTimeZoneId(u8*& ptr)
+    static std::string ToString_DateTimeTimeZoneId(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_seconds, temp_nanoseconds, temp_id;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_id.buf = temp_seconds.buf = temp_nanoseconds.buf = buf;
+
         std::string s = "DateTime:{seconds:";
 
         jump_table[*ptr](ptr, temp_seconds);            // date
@@ -1400,12 +1555,17 @@ struct BoltValue
      *  The LocalDateTime is represented with its seconds since epoch and nanoseconds.
      * 
      * @param ptr Pointer to the BoltValue representing the LocalDateTime.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue LocalDateTime.
      */
-    static std::string ToString_LocalDateTime(u8*& ptr)
+    static std::string ToString_LocalDateTime(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_seconds, temp_nanoseconds;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_seconds.buf = temp_nanoseconds.buf = buf;
+
         std::string s = "LocalDateTime:{seconds:";
 
         jump_table[*ptr](ptr, temp_seconds);            // date
@@ -1422,12 +1582,17 @@ struct BoltValue
      *  The Duration is represented with its months, days, seconds, and nanoseconds.
      * 
      * @param ptr Pointer to the BoltValue representing the Duration.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Duration.
      */
-    static std::string ToString_Duration(u8*& ptr)
+    static std::string ToString_Duration(u8*& ptr, BoltBuf* buf)
     {
         BoltValue temp_months, temp_days, temp_seconds, temp_nanoseconds;
+
+        // Update bug fix: set pointers to bolt buf
+        temp_months.buf = temp_days.buf = temp_seconds.buf = temp_nanoseconds.buf = buf;
+
         std::string s = "Duration:{months:";
 
         jump_table[*ptr](ptr, temp_months);            // months
@@ -1448,12 +1613,17 @@ struct BoltValue
      *  The Point2D is represented with its SRID, x, and y coordinates.
      * 
      * @param ptr Pointer to the BoltValue representing the Point2D.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Point2D.
      */
-    static std::string ToString_Point2D(u8*& ptr)
+    static std::string ToString_Point2D(u8*& ptr, BoltBuf* buf)
     {
         BoltValue tempi, tempx, tempy;
+
+        // Update bug fix: set pointers to bolt buf
+        tempi.buf = tempx.buf = tempy.buf = buf;
+
         std::string s = "Point2D:{srid:";
 
         jump_table[*ptr](ptr, tempi);    // integer value
@@ -1471,12 +1641,17 @@ struct BoltValue
      *  The Point3D is represented with its SRID, x, y, and z coordinates.
      * 
      * @param ptr Pointer to the BoltValue representing the Point3D.
+     * @param buf pointer to bolt buf - required for offsetting
      * 
      * @return std::string representing the BoltValue Point3D.
      */
-    static std::string ToString_Point3D(u8*& ptr)
+    static std::string ToString_Point3D(u8*& ptr, BoltBuf* buf)
     {
         BoltValue tempi, tempx, tempy, tempz;
+
+        // Update bug fix: set pointers to bolt buf
+        tempi.buf = tempx.buf = tempy.buf = tempz.buf = buf;
+
         std::string s = "Point3D:{srid:";
 
         jump_table[*ptr](ptr, tempi);    // integer value

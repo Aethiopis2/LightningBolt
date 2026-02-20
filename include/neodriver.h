@@ -43,7 +43,8 @@ class NeoDriver
 public:
 
     NeoDriver(const std::string& urls, BoltValue auth,
-        BoltValue extra = BoltValue::Make_Map());
+        BoltValue extra = BoltValue::Make_Map(),
+        const int pool_size_ = 0);
     ~NeoDriver();
 
     int Execute(std::string& query, std::map<std::string, std::string> params = {});
@@ -57,6 +58,7 @@ public:
 
     std::string Get_Last_Error() const;
     NeoCell* Get_Session();
+    NeoCellPool* Get_Pool();
 
 private:
 

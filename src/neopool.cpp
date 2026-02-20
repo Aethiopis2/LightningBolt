@@ -45,28 +45,29 @@ NeoCellPool::NeoCellPool(size_t nworkers, std::string& urls, BoltValue* pauth,
  * 
  * @return 0 on success or -ve number indicating error
  */
-int NeoCellPool::Start(const bool all_connections)
+LBStatus NeoCellPool::Start(const bool all_connections)
 {
-	int rc;		// return value from functions
+	LBStatus rc;		// return value from functions
 
 	if (!all_connections)
 	{
 		// start the next connection on the pool if not already
 		//	running
 		int idx = idx_counter.load(std::memory_order_acquire) % workers.size();
-		if ((rc = workers[idx].get()->Start(idx)) < 0)
-			return rc;
+		rc = workers[idx].get()->Start(idx);
 	} // end if start a single connection only
 	else
 	{
+		int id = 1;
 		for (auto& w : workers)
 		{
-			if ((rc = w->Start()) < 0)
+			rc = w->Start(id++);
+			if (!LB_OK(rc))
 				return rc;
 		} // end foreach workers
 	} // end else start everything
 
-	return 0;
+	return rc;
 } // end Start
 
 

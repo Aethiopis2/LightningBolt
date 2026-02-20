@@ -4,7 +4,7 @@
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @date created 10th of December 2025, Wednesday
- * @date updated 12th of Decemeber 2025, Friday
+ * @date updated 15th of Feburary 2026, Sunday
  *
  * @copyright Copyright (c) 2025
  */
@@ -28,7 +28,7 @@
  */
 NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
 	: connection(urls, pauth, pextras), running(false),
-	esleep(false), dsleep(false), try_count(0), max_tries(5)
+	  esleep(false), dsleep(false), try_count(0), max_tries(5), connect_duration(0)
 {
 } // end NeoCell
 
@@ -55,6 +55,9 @@ NeoCell::~NeoCell()
  */
 LBStatus NeoCell::Start(const int id)
 {
+	auto start_time = std::chrono::high_resolution_clock::now();
+
+	// clear previous errors if any and our histogram
 	LBStatus rc = connection.Init(id);
 	if (!LB_OK(rc))
 	{
@@ -71,15 +74,18 @@ LBStatus NeoCell::Start(const int id)
 	connection.Wait_Task();
 
 	// check decoded value
-	auto task = connection.tasks.Dequeue();
-	if (task.has_value())
+	auto result = connection.results.Dequeue();
+	if (result.has_value())
 	{
-		if (task->result.Success())
+		if (result->Is_Error())
 		{
-			last_error = task->result.error.ToString();
+			last_error = result->err.ToString();
 			return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_NEO4J);
 		} // end if failed
 	} // end if
+	
+	connect_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::high_resolution_clock::now() - start_time).count();
 
 	return rc;	// should be ready
 } // end Start
@@ -114,23 +120,18 @@ int NeoCell::Fetch(BoltResult& results)
 	// wait for at least one full message
 	connection.Wait_Task();
 
-	if (read_ret < 0)
-		return read_ret;
-
 	auto qs = connection.results.Dequeue();
 	if (!qs.has_value())
 		return -1;
 
-	results = qs.value();
+	results = std::move(qs.value());
 
-	if (connection.results.Is_Empty())
-		connection.read_buf.Reset();
 	return 0;
 } // end Fetch
 
 
 /**
- * @brief returns the underlying socket descriptor
+ * @brief returns the underlying socket descriptorconnection.read_buf.Reset();
  */
 int NeoCell::Get_Socket() const
 {
@@ -155,6 +156,30 @@ int NeoCell::Get_Max_Try_Count() const
 	return max_tries;
 } // end Get_Max_Try_Count
 
+
+/**
+ * @brief returns the duration in milliseconds to complete a connection, including
+ *	tcp connection and or ssl connection and ver negotitation and hello and logon
+ *	authentication full round trip.
+ */
+u64 NeoCell::Get_Connection_Time() const
+{
+	return connect_duration;
+} // end Get_Connecton_Time
+
+
+u64 NeoCell::Percentile(double p) const
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		connection.latencies.Percentile(p)).count();
+} // end Percentile
+
+
+u64 NeoCell::Wall_Latency() const
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		connection.latencies.Avg_Latency()).count();
+}
 
 /**
  * @brief indicates if the underlying connection is still active
@@ -243,6 +268,7 @@ void NeoCell::Encoder_Loop()
 		if (!equeue.Is_Empty())
 		{
 			auto req = equeue.Front();
+			int write_ret = 0;
 			if (req.has_value())
 			{
 				switch (req->get().type)
@@ -279,55 +305,63 @@ void NeoCell::Encoder_Loop()
 
 			equeue.Dequeue();		// now remove it
 		} // end if not empty
-		else
-		{
-			esleep.store(true, std::memory_order_release);
-			Sleep(esleep);	// wait it out till notified.
-		} // end else
+		else Sleep(esleep);	// wait it out till notified.
+
 	} // end while running
 } // end Write_Loop
 
 
 /**
  * @brief decoder thread sits and polls incomming requests, decodes them as they appear
- *	on the connection decoder tasks. The decoder is also responsible for decrementing
- *	the added qcounts after they are persumed to be processed. The thread uses, attribute
- *	read_ret int value to convey error messages beyond the thread. Shouls no tasks exist
- *	or should it not fetch more, has_more = false, then it sleeps until woken by
- *	Add_QCount().
+ *	on the connection decoder tasks. When decoder tasks are empty are has no more to do,
+ *	the thread sleeps/waits for state changes on the atomic boolean dsleep is true.
  */
 void NeoCell::Decoder_Loop()
 {
-	bool has_more = false;	// used to indicate if we need to poll more
+	bool has_more = false;		// used to indicate if we need to poll more
+	LBStatus rc = LB_Make();	// 0k
+
 	while (Is_Running())
 	{
 		if (!connection.tasks.Is_Empty() || has_more)
 		{
-			LBStatus rc = connection.Poll_Readable();
-			if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
+			rc = connection.Poll_Readable();
+			LBAction action = LBAction(LB_Action(rc));
+			LBDomain domain = LBDomain(LB_Domain(rc));
+
+			if ((action == LBAction::LB_FAIL && (domain == LBDomain::LB_DOM_SYS || 
+				domain == LBDomain::LB_DOM_SSL)) ||
+				(action == LBAction::LB_RETRY && domain == LBDomain::LB_DOM_SYS) )
 			{
-				if (read_ret >= -2)
-				{
-					Set_Running(false);
-					EWake();
-					break;
-				} // end if fatal
+				Set_Running(false);
+				EWake();
+				break;
 			} // end if readable
-			else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
+			else if (action == LBAction::LB_HASMORE)
 			{
 				has_more = true;
 				continue;
 			} // end else waiting for more
 
 			has_more = false;
+
+			if (connection.tasks.Is_Empty() && connection.results.Is_Empty())
+			{
+				connection.read_buf.Reset();    // reset buffer if no more tasks
+			} // end if no more tasks
 		} // end if
 		else
 		{
-			dsleep.store(true, std::memory_order_release);
-			Sleep(dsleep);
-		} // end else sleeping
+			//if (!dsleep.load(std::memory_order_acquire))
+			{
+				Sleep(dsleep);
+			} // end if sleeping
+		} // end else no more tasks, sleep it out
 	} // end while running
-} // end Read_Loop
+
+	// on abnormal exit, handle it
+	//if (!LB_OK(rc)) LB_Handle_Status(rc, this);
+} // end Decoder_Loop
 
 
 /**
@@ -358,6 +392,15 @@ void NeoCell::DWake()
 
 
 /**
+ * @brief clear's the histogram of latencies
+ */
+void NeoCell::Clear_Histo()
+{
+	connection.latencies.Clear();
+} // end Clear_Histo
+
+
+/**
  * @brief causes the encoder thread to wait or simulate sleep as long as boolean atomic
  *	member/attribute 'esleep' is set to true. On change of state the sleeping thread
  *	needs to be notified through Toggle_ESleep() or Add_QCount(), which internally calls
@@ -372,6 +415,9 @@ void NeoCell::Sleep(std::atomic<bool>& ws)
 
 		ws.wait(bsleep);
 	} // end while
+
+	// force sleep on next entry
+	ws.store(true, std::memory_order_release);
 } // end Sleep_Encoder
 
 

@@ -579,7 +579,7 @@ LBStatus TcpClient::SSL_Recv(void * buf, const int len)
             return LB_Make(LBAction::LB_WAIT, LBDomain::LB_DOM_SSL);          // try again a little later
         else
         {
-            return LB_Make(LBAction::LB_RETRY, LBDomain::LB_DOM_SSL,
+            return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_SSL,
                 LBCode::LB_CODE_NONE, static_cast<u32>(ERR_get_error()));   // other ssl errors
 		} // end else
     } // end if error condition

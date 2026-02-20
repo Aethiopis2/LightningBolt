@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 10th of December 2025, Wednesday
- * @date updated 18th of January 2026, Sunday
+ * @date updated 15th of Feburary 2026, Sunday
  */
 #pragma once
 
@@ -72,7 +72,7 @@ namespace Auth
 //===============================================================================|
 class NeoCell
 {
-    friend void LB_Handle_Status(LBStatus, NeoCell*);
+    friend LBStatus LB_Handle_Status(LBStatus, NeoCell*);
 
 public:
 
@@ -80,24 +80,28 @@ public:
     ~NeoCell();
 
     LBStatus Start(const int id = 1);
+    LBStatus Run(const std::string& cypher, BoltValue&& param);
+
     int Enqueue_Request(CellCommand&& cmd);
     int Fetch(BoltResult& result);
     int Get_Socket() const;
     int Get_Try_Count() const;
     int Get_Max_Try_Count() const;
+    u64 Get_Connection_Time() const;
+    u64 Percentile(double p) const;
+    u64 Wall_Latency() const;
 
     bool Is_Connected() const;
     std::string Get_Last_Error() const;
 
     void Stop();
     void DWake();
+    void Clear_Histo();
 	bool Can_Retry();
     void Set_Retry_Count(const int n);
 
 private:
 
-    int read_ret;           // store's return codes from read thread
-    int write_ret;          // return values from the corresponding write
 	int try_count;          // number of connection attempts, resets on successful connection or exhaustion
     int max_tries;          // the maximum number of retries allowed; default to 5
 
@@ -110,6 +114,8 @@ private:
     std::thread decoder_thread; // reader therad id
 
     NeoConnection connection;           // a connection instance; either standalone or routed
+    
+    s64 connect_duration;               // microseconds it took to tcp connect +/- ssl connect + version negotiation + HELLO +/- LOGON
     LockFreeQueue<CellCommand> equeue;  // request queue for the cell
 
     void Encoder_Loop();

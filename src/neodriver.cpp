@@ -26,9 +26,11 @@ const int POOL_SIZE = 1;
 //===============================================================================|
 //          DEFINITON
 //===============================================================================|
-NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras)
-	: urls(urls), auth(auth), pool(POOL_SIZE, this->urls, &this->auth, &this->extras),
-	pool_size(POOL_SIZE)
+NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
+	const int pool_size_)
+	: urls(urls), auth(auth), 
+	pool(pool_size_ == 0 ? POOL_SIZE : pool_size_, this->urls, &this->auth, &this->extras),
+	pool_size(pool_size_ == 0 ? POOL_SIZE : pool_size_)
 {
 	this->extras = BoltValue::Make_Map();
 
@@ -169,6 +171,18 @@ NeoCell* NeoDriver::Get_Session()
 } // end pcell
 
 
+NeoCellPool* NeoDriver::Get_Pool()
+{
+	for (int i = 0; i < pool.Workers().size(); i++)
+	{
+		auto* p = pool.Acquire();
+		Start_Session(p);
+	}
+		
+	return &pool;
+} // end Get_Pool
+
+
 void NeoDriver::Poll_Read()
 {
 	while (looping.load(std::memory_order_acquire))
@@ -186,6 +200,7 @@ void NeoDriver::Poll_Read()
 					looping.store(false, std::memory_order_relaxed);
 					break;
 				}
+
 				// ready to read
 				cell->DWake();	// wake the decoder thread
 			} // end if readable
