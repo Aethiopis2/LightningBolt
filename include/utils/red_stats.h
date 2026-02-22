@@ -104,6 +104,14 @@ struct LatencyHistogram
     inline void Clear()
     {
         memset(latency_hist, 0, sizeof(s64) * HIST_BUCKETS);
+        samples = 0;
+		best_latency = duration::max();
+		worst_latency = duration::zero();
+        total_latency = duration::zero();
+        total_bytes_written = 0;
+        total_bytes_read = 0;
+        avg_bytes_written = 0;
+		avg_bytes_read = 0;
     } // end Clear
 
 

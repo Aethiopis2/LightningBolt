@@ -99,9 +99,6 @@ LBStatus NeoConnection::Init(const int cli_id)
  */
 LBStatus NeoConnection::Reconnect()
 {
-    // reset previous query states
-    tasks.Clear();
-
     LBStatus rc = Connect();
     if (!LB_OK(rc))
         return rc;
@@ -114,9 +111,8 @@ LBStatus NeoConnection::Reconnect()
         Enable_Keepalive();
 
         // push a state into the queue
-        tasks.Enqueue({ QueryState::Connection });
         if (supported_version.major >= 5)       // use version 6/5 hello
-			rc = Send_Hellov5();
+			rc = Send_Hellov5(QueryState::Connection);
         else  // version 4 and below 
             rc = Send_Hellov4();
 
@@ -128,9 +124,9 @@ LBStatus NeoConnection::Reconnect()
 
 
 /**
- * @brief runs a cypher query against the connected neo4j database. The driver
- *  must be in ready state to accept queries. The function appends a PULL/ALL
- *  message after the RUN message to begin fetching results.
+ * @brief runs a cypher query against the connected neo4j database. The 
+ *  function appends a PULL/ALL message after the RUN message to begin 
+ *  fetching results asap.
  *
  * @param cypher the cypher query string
  * @param params optional parameters for the cypher query
@@ -139,17 +135,9 @@ LBStatus NeoConnection::Reconnect()
  *
  * @return 0 on success and -2 on application error
  */
-int NeoConnection::Run(const char* cypher, BoltValue params, BoltValue extras,
-    const int n, std::function<void(BoltResult&)> rscb)
+LBStatus NeoConnection::Run(const char* cypher, BoltValue params, BoltValue extras,
+    const int n)
 {
-    // update the state and number of queries piped, also set the poll flag
-    //  to signal recv to wait on block for incoming data
-    DecoderTask ts;
-    ts.state = QueryState::Run;
-    ts.start_clock = std::chrono::high_resolution_clock::now();
-    ts.cb = rscb;
-    tasks.Enqueue(std::move(ts));
-
     // protect pool
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
 
@@ -162,17 +150,21 @@ int NeoConnection::Run(const char* cypher, BoltValue params, BoltValue extras,
             })
     );
 
-    encoder.Encode(run);
-    Encode_Pull(n);
-    if (!Flush())
+    LBStatus rc = encoder.Encode(run);
+    if (!LB_OK(rc))
     {
-        tasks.Dequeue();   // remove the run state
-        Release_Pool<BoltValue>(offset);
-        return -1;
-    } // end if no flush
+        rc = Retry_Encode(run);
+        if (!LB_OK(rc))
+        {
+            Release_Pool<BoltValue>(offset);
+            return rc;
+        } // end if still bad
+    } // end if wasn't good
+    Encode_Pull(n);
 
+    rc = Flush();
     Release_Pool<BoltValue>(offset);
-    return 0;
+    return rc;
 } // end Run_Query
 
 
@@ -197,7 +189,7 @@ int NeoConnection::Begin(const BoltValue& options)
             })
     );
 
-    if (!Encode_And_Flush(QueryState::Begin, begin))
+    if (!Encode_And_Flush(begin))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -232,7 +224,7 @@ int NeoConnection::Commit(const BoltValue& options)
             })
     );
 
-    if (!Encode_And_Flush(QueryState::Commit, commit))
+    if (!Encode_And_Flush(commit))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -267,7 +259,7 @@ int NeoConnection::Rollback(const BoltValue& options)
             })
     );
 
-    if (!Encode_And_Flush(QueryState::Rollback, rollback))
+    if (!Encode_And_Flush(rollback))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -312,7 +304,7 @@ int NeoConnection::Discard(const int n)
             })
         }));
 
-    if (!Encode_And_Flush(QueryState::Discard, discard))
+    if (!Encode_And_Flush(discard))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -336,7 +328,7 @@ int NeoConnection::Telemetry(const int api)
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage tel(BoltValue(BOLT_TELEMETRY, { api }));
 
-    if (!Encode_And_Flush(QueryState::Telemetry, tel))
+    if (!Encode_And_Flush(tel))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -361,7 +353,7 @@ int NeoConnection::Reset()
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage reset(BoltValue(BOLT_RESET, {}));
 
-    if (!Encode_And_Flush(QueryState::Reset, reset))
+    if (!Encode_And_Flush(reset))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -384,7 +376,7 @@ int NeoConnection::Logoff()
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage off(BoltValue(BOLT_LOGOFF, {}));
 
-    if (!Encode_And_Flush(QueryState::Logoff, off))
+    if (!Encode_And_Flush(off))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -407,7 +399,7 @@ int NeoConnection::Goodbye()
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage gb(BoltValue(BOLT_GOODBYE, {}));
 
-    if (!Encode_And_Flush(QueryState::Connection, gb))
+    if (!Encode_And_Flush(gb))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -431,7 +423,7 @@ int NeoConnection::Ack_Failure()
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage ack(BoltValue(BOLT_ACK_FAILURE, {}));
 
-    if (!Encode_And_Flush(QueryState::Ack_Failure, ack))
+    if (!Encode_And_Flush(ack))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -483,7 +475,7 @@ int NeoConnection::Route(BoltValue routing,
         route = Route_Legacy(routing);
     } // end else
 
-    if (!Encode_And_Flush(QueryState::Route, route))
+    if (!Encode_And_Flush(route))
     {
         Release_Pool<BoltValue>(offset);
         return -1;
@@ -532,41 +524,6 @@ void NeoConnection::Set_Host_Address(const std::string& host, const std::string&
 } // end Set_HostAddress
 
 
-/**
- * @brief sets the callbacks passed from Cell object.
- *
- * @param encb pointer to encoder function called after encode
- */
-void NeoConnection::Set_Callbacks(std::function<void(BoltResult&)> rscb)
-{
-    auto qs = tasks.Front();
-    if (qs.has_value())
-    {
-        qs->get().cb = rscb;
-    } // end Set_Callbacks
-} // end Set_Callbacks
-
-
-/**
- * @brief returns a stringified version of the current driver state.
- */
-std::string NeoConnection::State_ToString() const
-{
-    static std::string states[QUERY_STATES]{
-        "Connection", "Logon","Logoff", "Run", "Pull", "Streaming",
-        "Discard", "Begin", "Commit", "Rollback", "Route",
-        "Reset", "Ack_Failure", "Error"
-    };
-
-    auto qs = const_cast<LockFreeQueue<DecoderTask>&>(tasks).Front();
-    if (!qs.has_value())
-        return "Unknown";
-
-    u8 s = static_cast<u8>(qs->get().state);
-    return states[s % QUERY_STATES];
-} // end State_ToString
-
-
 
 //===============================================================================|
 /**
@@ -600,7 +557,7 @@ LBStatus NeoConnection::Poll_Writable()
  *
  * @return a true on success
  */
-LBStatus NeoConnection::Poll_Readable()
+LBStatus NeoConnection::Poll_Readable(DecoderTask& task)
 {
     LBStatus rc;        // store's return value
 
@@ -620,16 +577,21 @@ LBStatus NeoConnection::Poll_Readable()
 
     int bytes = LB_Aux(rc);
     read_buf.Advance(bytes);
-    bytes += prev_remaining;
-    prev_remaining = 0;
+
+    // setup the task structure for decoder
+    bytes += task.prev_bytes;
+    task.prev_bytes = 0;
+
+	task.view.cursor = read_buf.Read_Ptr();
+	task.view.size = bytes;
 
     // if data is completely received push to response handler
-    rc = Decode_Response(read_buf.Read_Ptr(), bytes);
+    rc = Decode_Response(task);
     if (!LB_OK(rc))
     {
         if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
         {
-            prev_remaining = bytes - LB_Aux(rc);
+            task.prev_bytes = bytes - LB_Aux(rc);
             read_buf.Consume(LB_Aux(rc));
 		} // end if has more
 		
@@ -686,15 +648,15 @@ LBStatus NeoConnection::Can_Decode(u8* view, const u32 bytes_remain)
  * @brief persuming that data has been fully received from Poll_Readable(), the
  *  function decodes the bolt encoded responses (message).
  */
-LBStatus NeoConnection::Decode_Response(u8* view, const u32 bytes)
+LBStatus NeoConnection::Decode_Response(DecoderTask& task)
 {
-    //Utils::Dump_Hex((const char*)view, bytes);
+    //Utils::Dump_Hex((const char*)task.view.cursor, task.view.size);
     size_t decoded = 0; // tacks decoded bytes thus far
     LBStatus rc = 0;    // holds return values
 
-    while (decoded < bytes)
+    while (decoded < task.view.size)
     {
-		rc = Can_Decode(view, bytes - decoded);
+		rc = Can_Decode(task.view.cursor, task.view.size - decoded);
         if (!LB_OK(rc))
         {
             if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
@@ -706,34 +668,25 @@ LBStatus NeoConnection::Decode_Response(u8* view, const u32 bytes)
             return rc; 
 		} // end if can't decode
 
-        auto task = tasks.Front();
-        if (!task.has_value())
-        {
-            return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_STATE);
-        } // end if no query
-
-        task->get().view.cursor = view;
-        task->get().view.size = LB_Aux(rc);
-
-        u8 s = static_cast<u8>(task->get().state);
-        u8 tag = view[3];
+        u8 s = static_cast<u8>(task.state);
+        u8 tag = task.view.cursor[3];
 
         switch (tag)
         {
         case BOLT_SUCCESS:
-            rc = (this->*success_handler[s])(task->get());
+            rc = (this->*success_handler[s])(task);
             break;
 
         case BOLT_FAILURE:
-            rc = Handle_Failure(task->get());
+            rc = Handle_Failure(task);
             break;
 
         case BOLT_RECORD:
-            rc = Handle_Record(task->get());
+            rc = Handle_Record(task);
             break;
 
         case BOLT_IGNORED:
-            rc = Handle_Ignored(task->get());
+            rc = Handle_Ignored(task);
             break;
 
         default:
@@ -743,7 +696,7 @@ LBStatus NeoConnection::Decode_Response(u8* view, const u32 bytes)
         } // end switch
 
 		int decoded_bytes = LB_Aux(rc);
-        view += decoded_bytes;
+        task.view.cursor += decoded_bytes;
         decoded += decoded_bytes;
     } // end while
 
@@ -812,21 +765,21 @@ bool NeoConnection::Is_Record_Done(DecoderTask& t)
  * @brief encodes the boltvalue reference and flushes it to peer after it saved
  *  its state into the query_states queue for later use during response decoding.
  *
- * @param state the query state to save
  * @param msg the BoltValue to encode and send
  *
  * @return true on success alas false on sys error
  */
-bool NeoConnection::Encode_And_Flush(QueryState state, BoltMessage& msg)
+bool NeoConnection::Encode_And_Flush(BoltMessage& msg)
 {
-    tasks.Enqueue({ state });
-    encoder.Encode(msg);
-    if (!Flush())
+    LBStatus rc = encoder.Encode(msg);
+    if (!LB_OK(rc))
     {
-        tasks.Dequeue();   // remove the new state
-        return false;
-    } // end if no flush
+        rc = Retry_Encode(msg);
+        if (!LB_OK(rc))
+            return false;
+	} // end if wasn't good
 
+	rc = Flush();
     return true;
 } // end Encode_And_Flush
 
@@ -923,7 +876,7 @@ LBStatus NeoConnection::Negotiate_Version()
  *
  * @return LB_Status codes
  */
-LBStatus NeoConnection::Send_Hellov5()
+LBStatus NeoConnection::Send_Hellov5(QueryState s)
 {
     BoltMessage hello;
     float version = supported_version.Get_Version();
@@ -941,73 +894,64 @@ LBStatus NeoConnection::Send_Hellov5()
         float removed_version;
     };
     std::vector<Param_Helper> param_list{
-        {"user_agent", (pextras && pextras[0]["user_agent"].type != BoltType::Unk) ?
-            pextras[0]["user_agent"] :
+        {USER_AGENT_STRING, (pextras && pextras[0][USER_AGENT_STRING].type != BoltType::Unk) ?
+            pextras[0][USER_AGENT_STRING] :
             BoltValue(("LB/v" + std::to_string(client_id + 1) + ".0").c_str()), 1.0, 100},
 
-        {"patch_bolt", (pextras ? pextras[0]["patch_bolt"] : BoltValue::Make_Unknown()), 4.3, 4.4},
-        {"routing", (pextras ? pextras[0]["routing"] : BoltValue::Make_Unknown()), 4.1, 100},
-        {"notifications_minimum_severity", (pextras ? pextras[0]["notifications_minimum_severity"]
+        {PATCH_BOLT_STRING, (pextras ? pextras[0][PATCH_BOLT_STRING] : BoltValue::Make_Unknown()), 4.3, 4.4},
+        {ROUTES_STRING, (pextras ? pextras[0][ROUTES_STRING] : BoltValue::Make_Unknown()), 4.1, 100},
+        {NOTIF_MIN_SEVERITY_STRING, (pextras ? pextras[0][NOTIF_MIN_SEVERITY_STRING]
             : BoltValue::Make_Unknown()), 5.2, 100},
-        {"notifications_disabled_categories",
-            (pextras ? pextras[0]["notifications_disabled_categories"] : BoltValue::Make_Unknown()), 5.2, 5.4}
+        {NOTIF_DISABLED_CATS_STRING,
+            (pextras ? pextras[0][NOTIF_DISABLED_CATS_STRING] : BoltValue::Make_Unknown()), 5.2, 5.4}
     };
 
     LBStatus rc = 0;
-    auto task = tasks.Front();
-    if (task.has_value())
+    if (s == QueryState::Connection)
     {
-        if (task->get().state == QueryState::Connection)
+        // persume version 5.3+ is supported; i.e. graft versions 5.x as 
+        //  same versions with minor changes
+
+        hello.msg = BoltValue::Make_Struct(BOLT_HELLO);
+        BoltValue bmp = BoltValue::Make_Map();
+        for (auto& param : param_list)
         {
-            // persume version 5.3+ is supported; i.e. graft versions 5.x as 
-            //  same versions with minor changes
-
-            // update state to logon
-            task->get().state = QueryState::Logon;
-
-            hello.msg = BoltValue::Make_Struct(BOLT_HELLO);
-            BoltValue bmp = BoltValue::Make_Map();
-            for (auto& param : param_list)
+            if (param.val.type != BoltType::Unk &&
+                (param.active_version <= version && param.removed_version > version))
             {
-                if (param.val.type != BoltType::Unk &&
-                    (param.active_version <= version && param.removed_version > version))
-                {
-                    bmp.Insert_Map(param.key.c_str(), param.val);
-                } // end if not unknown
-            } // end for params
+                bmp.Insert_Map(param.key.c_str(), param.val);
+            } // end if not unknown
+        } // end for params
 
-            // add bolt agent info
-            if (version >= 5.3)
-            {
-                bmp.Insert_Map("bolt_agent", BoltValue({
-                        mp("product", "LightningBolt/v1.0.0"),
-                        mp("platform", "Linux 6.6.87.2/microsoft-standard-WSL2; x64"),
-                        mp("language", "C++/17"),
-                    }));
-            } // end sversion
-
-            hello.msg.Insert_Struct(bmp);
-        } // end if connecting
-        else if (task->get().state == QueryState::Logon)
+        // add bolt agent info
+        if (version >= 5.3)
         {
-            task->get().state = QueryState::Connection;
-            hello = (BoltValue(BOLT_LOGON, { pauth[0] }));
-        } // end else
+            bmp.Insert_Map(BOLT_AGENT_STRING, BoltValue({
+                    mp(PRODUCT_STRING, PRODUCT_VALUE),
+                    mp(PLATFORM_STRING, PLATFORM_VALUE),
+                    mp(LANGUAGE_STRING, LANGUAGE_VALUE),
+                }));
+        } // end sversion
 
-        rc = encoder.Encode(hello);
+        hello.msg.Insert_Struct(bmp);
+    } // end if connecting
+    else if (s == QueryState::Logon)
+    {
+        hello = (BoltValue(BOLT_LOGON, { pauth[0] }));
+    } // end else
+
+    rc = encoder.Encode(hello);
+    if (!LB_OK(rc))
+    {
+        rc = Retry_Encode(hello);
         if (!LB_OK(rc))
         {
-            rc = Retry_Encode(hello);
-            if (!LB_OK(rc))
-            {
-                Release_Pool<BoltValue>(offset);
-                return rc;
-            } // end if still bad
-        } // end if wasn't good
+            Release_Pool<BoltValue>(offset);
+            return rc;
+        } // end if still bad
+    } // end if wasn't good
 
-        rc = Flush();
-    } // end if has value
-    
+    rc = Flush();
     Release_Pool<BoltValue>(offset);
     return rc;
 } // end Send_Hellov5
@@ -1033,7 +977,7 @@ LBStatus NeoConnection::Send_Hellov4()
     std::string uagent{ ("LB/" + std::to_string(client_id + 1) + ".0").c_str() };
 
     BoltValue map = pauth[0];
-    map.Insert_Map("user_agent", BoltValue(uagent.c_str()));
+    map.Insert_Map(USER_AGENT_STRING, BoltValue(uagent.c_str()));
     BoltMessage hello(BoltValue(BOLT_HELLO, {
         map
         }));
@@ -1068,17 +1012,19 @@ LBStatus NeoConnection::Send_Hellov4()
 inline LBStatus NeoConnection::Success_Hello(DecoderTask& task)
 {
     int size = decoder.Decode(task.view.cursor, task.result.fields);
-    if (task.state == QueryState::Logon)
+    if (task.state == QueryState::Connection && supported_version.major >= 5)
     {
-        Send_Hellov5();     // log on message
+		task.state = QueryState::Logon;
+        Send_Hellov5(task.state);     // log on message
         return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
             LBCode::LB_CODE_NONE, size);     // poll once more
     } // end if
     
-    results.Enqueue(std::move(task.result));
-    latencies.Record_Latency(std::chrono::high_resolution_clock::now() - task.start_clock);
-    tasks.Dequeue();        // remove it from tasks 
-
+	// we are done with handshake, we're ready to rock
+    latencies.Record_Latency(
+        std::chrono::high_resolution_clock::now() - 
+        task.start_clock
+    ); 
     Wake();
     return LB_OK_INFO(size);
 } // end Success_Hello
@@ -1138,13 +1084,13 @@ inline LBStatus NeoConnection::Success_Record(DecoderTask& task)
     } // end if callback
     else
     {
-        results.Enqueue(std::move(task.result));
         Wake();     // waiting threads
     } // end else
 
-    latencies.Record_Latency(std::chrono::high_resolution_clock::now() - task.start_clock);
-    tasks.Dequeue();        // remove it
-
+    latencies.Record_Latency(
+        std::chrono::high_resolution_clock::now() - 
+        task.start_clock
+    );
     return LB_OK_INFO(LB_Aux(rc)); // should be LB_OK_INFO
 } // end Success_Record
 
@@ -1160,7 +1106,7 @@ inline LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 {
     Wake();     // anything pending
 
-    tasks.Dequeue();
+    //tasks.Dequeue();
     read_buf.Reset();
 
     return LB_OK_INFO(task.view.size);
@@ -1213,12 +1159,9 @@ inline LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     LBAction action;
 
     LBStatus rc = decoder.Decode(task.view.cursor, task.result.err);
-    results.Enqueue(std::move(task.result));
-
     if (!LB_OK(rc))
     {
         Wake(); // anyone on wait
-        tasks.Dequeue();
         return rc;
     } // end if failed decoding
 
@@ -1240,7 +1183,6 @@ inline LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     }; // end switch
 
     latencies.Record_Latency(std::chrono::high_resolution_clock::now() - task.start_clock);
-    tasks.Dequeue();
     Wake();  // those who wait
     return LB_Make(action, domain);
 } // end Handle_Failure

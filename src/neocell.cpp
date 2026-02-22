@@ -28,7 +28,7 @@
  */
 NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
 	: connection(urls, pauth, pextras), running(false),
-	  esleep(false), dsleep(false), try_count(0), max_tries(5), connect_duration(0)
+	  esleep(0), dsleep(0), try_count(0), max_tries(5)
 {
 } // end NeoCell
 
@@ -55,9 +55,10 @@ NeoCell::~NeoCell()
  */
 LBStatus NeoCell::Start(const int id)
 {
-	auto start_time = std::chrono::high_resolution_clock::now();
+	// clear previous errors & add new ones
+	tasks.Clear();
+	tasks.Enqueue({ QueryState::Connection });
 
-	// clear previous errors if any and our histogram
 	LBStatus rc = connection.Init(id);
 	if (!LB_OK(rc))
 	{
@@ -74,18 +75,15 @@ LBStatus NeoCell::Start(const int id)
 	connection.Wait_Task();
 
 	// check decoded value
-	auto result = connection.results.Dequeue();
-	if (result.has_value())
+	auto t = tasks.Dequeue();
+	if (t.has_value())
 	{
-		if (result->Is_Error())
+		if (t->result.Is_Error())
 		{
-			last_error = result->err.ToString();
+			last_error = t->result.err.ToString();
 			return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_NEO4J);
 		} // end if failed
 	} // end if
-	
-	connect_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::high_resolution_clock::now() - start_time).count();
 
 	return rc;	// should be ready
 } // end Start
@@ -118,13 +116,15 @@ int NeoCell::Enqueue_Request(CellCommand&& cmd)
 int NeoCell::Fetch(BoltResult& results)
 {
 	// wait for at least one full message
-	connection.Wait_Task();
+	do
+	{
+		connection.Wait_Task();
+		auto task = tasks.Dequeue();
+		if (!task.has_value())
+			return -1;
 
-	auto qs = connection.results.Dequeue();
-	if (!qs.has_value())
-		return -1;
-
-	results = std::move(qs.value());
+		results = std::move(task->result);
+	} while (!tasks.Is_Empty());
 
 	return 0;
 } // end Fetch
@@ -158,16 +158,14 @@ int NeoCell::Get_Max_Try_Count() const
 
 
 /**
- * @brief returns the duration in milliseconds to complete a connection, including
- *	tcp connection and or ssl connection and ver negotitation and hello and logon
- *	authentication full round trip.
+ * @brief returns the p-th percentile latency in milliseconds, aproximately. 
+ *	The latency is calculated based on the time it takes for the connection to 
+ *	encode + send + receive + decode a full response for a request. 
+ *
+ * @param p the percentile to compute in [0.0, 1.0]
+ * 
+ * @return the p-th percentile latency in milliseconds
  */
-u64 NeoCell::Get_Connection_Time() const
-{
-	return connect_duration;
-} // end Get_Connecton_Time
-
-
 u64 NeoCell::Percentile(double p) const
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -175,6 +173,13 @@ u64 NeoCell::Percentile(double p) const
 } // end Percentile
 
 
+/**
+ * @brief returns the average latency in milliseconds, aproximately. The latency 
+ *	is calculated based on the time it takes for the connection to encode + 
+ *	send + receive + decode a full response for a request.
+ *
+ * @return the average latency in milliseconds
+ */
 u64 NeoCell::Wall_Latency() const
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -239,8 +244,8 @@ void NeoCell::Stop()
 	// drain all requrests before terminating
 	do {
 		connection.Wait_Task();
-		connection.tasks.Dequeue();
-	} while (!connection.tasks.Is_Empty());
+		tasks.Dequeue();
+	} while (!tasks.Is_Empty());
 
 	connection.Terminate();
 	Set_Running(false);
@@ -274,23 +279,28 @@ void NeoCell::Encoder_Loop()
 				switch (req->get().type)
 				{
 				case CellCmdType::Run:
+					tasks.Enqueue({ QueryState::Run, req->get().cb });
 					write_ret = connection.Run(req->get().cypher.c_str(), req->get().params,
-						req->get().extras, -1, req->get().cb);
+						req->get().extras, -1);
 					break;
 
 				case CellCmdType::Begin:
+					tasks.Enqueue({ QueryState::Begin });
 					write_ret = connection.Begin(req->get().params);
 					break;
 
 				case CellCmdType::Commit:
+					tasks.Enqueue({ QueryState::Commit });
 					write_ret = connection.Commit(req->get().params);
 					break;
 
 				case CellCmdType::Rollback:
+					tasks.Enqueue({ QueryState::Rollback });
 					write_ret = connection.Rollback(req->get().params);
 					break;
 
 				case CellCmdType::Logoff:
+					tasks.Enqueue({ QueryState::Logoff });
 					write_ret = connection.Logoff();
 					break;
 
@@ -323,9 +333,12 @@ void NeoCell::Decoder_Loop()
 
 	while (Is_Running())
 	{
-		if (!connection.tasks.Is_Empty() || has_more)
+		if (!tasks.Is_Empty() || has_more)
 		{
-			rc = connection.Poll_Readable();
+			auto task = tasks.Front();
+			if (!task.has_value()) continue;	// should not happen but just in case
+
+			rc = connection.Poll_Readable(task.value());
 			LBAction action = LBAction(LB_Action(rc));
 			LBDomain domain = LBDomain(LB_Domain(rc));
 
@@ -344,12 +357,10 @@ void NeoCell::Decoder_Loop()
 			} // end else waiting for more
 	
 			has_more = false;
-			if (connection.tasks.Is_Empty() && connection.results.Is_Empty())
-			{
-				connection.read_buf.Reset();    // reset buffer if no more tasks
-			} // end if no more tasks
+			if (tasks.Is_Empty())
+				connection.read_buf.Reset();		// reset buffer if no more tasks
 		} // end if
-		//else Sleep(dsleep);	// wait it out till notified.
+		else Sleep(dsleep);	// wait it out till notified.
 	} // end while running
 
 	// on abnormal exit, handle it
@@ -364,12 +375,9 @@ void NeoCell::Decoder_Loop()
  */
 void NeoCell::EWake()
 {
-	esleep.store(false, std::memory_order_release);
-	if (equeue.Size() <= 1)
-	{
-		esleep.notify_one();		// wake the encoder thread if sleeping
-	} // end equeue
-} // end  Toggle_ESleep
+	int c = esleep.fetch_add(1, std::memory_order_acq_rel);
+	if (c >= 1) esleep.notify_one();
+} // end EWake
 
 
 /**
@@ -379,8 +387,8 @@ void NeoCell::EWake()
  */
 void NeoCell::DWake()
 {
-	dsleep.store(false, std::memory_order_release);
-	if (connection.tasks.Size() <= 1) dsleep.notify_one();
+	int c = dsleep.fetch_add(1, std::memory_order_acq_rel);
+	if (c >= 1) dsleep.notify_one();
 } // end DWake
 
 
@@ -399,18 +407,15 @@ void NeoCell::Clear_Histo()
  *	needs to be notified through Toggle_ESleep() or Add_QCount(), which internally calls
  *	esleep.notify_one() during the first changes to the equeue or encoder queue.
  */
-void NeoCell::Sleep(std::atomic<bool>& ws)
+void NeoCell::Sleep(std::atomic<int>& ws)
 {
 	while (Is_Running())
 	{
-		bool bsleep = ws.load(std::memory_order_acquire);
-		if (!bsleep) break;		// not sleeping anymore
+		int c = ws.fetch_sub(1, std::memory_order_acq_rel);
+		if (c <= 0) break;		// not sleeping anymore
 
-		ws.wait(bsleep);
+		ws.wait(c);
 	} // end while
-
-	// force sleep on next entry
-	ws.store(true, std::memory_order_release);
 } // end Sleep_Encoder
 
 

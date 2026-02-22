@@ -15,6 +15,7 @@
 #include "bolt/bolt_decoder.h"
 #include "bolt/bolt_encoder.h"
 #include "bolt/decoder_task.h"
+#include "bolt/bolt_auth.h"
 #include "utils/lock_free_queue.h"
 #include "utils/red_stats.h"
 
@@ -69,9 +70,8 @@ public:
 
     LBStatus Init(const int cli_id = -1);
     LBStatus Reconnect();
-    int Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
-        BoltValue extras = BoltValue::Make_Map(), const int chunks = -1,
-        std::function<void(BoltResult&)> rscb = nullptr);
+    LBStatus Run(const char* cypher, BoltValue params = BoltValue::Make_Map(),
+        BoltValue extras = BoltValue::Make_Map(), const int chunks = -1);
 
     int Begin(const BoltValue& options = BoltValue::Make_Map());
     int Commit(const BoltValue& options = BoltValue::Make_Map());
@@ -91,9 +91,6 @@ public:
     void Terminate();
     void Set_ClientID(const int cli_id);
     void Set_Host_Address(const std::string& host, const std::string& port);
-    void Set_Callbacks(std::function<void(BoltResult&)> rscb);
-
-    std::string State_ToString() const;
 
 private:
 
@@ -107,10 +104,6 @@ private:
 
     std::atomic<bool> is_done;  // determines if the next decoding batch is done
 
-    LockFreeQueue<DecoderTask> tasks;       // queue of pipelined query responses
-    LockFreeQueue<BoltResult> results;      // queue of query reults decoded
-    Neo4jVerInfo supported_version;         // holds major and minor versions for server
-
     // storage buffers
     BoltBuf read_buf;
     BoltBuf write_buf;
@@ -118,23 +111,24 @@ private:
     BoltEncoder encoder;
     BoltDecoder decoder;
 
-    LatencyHistogram latencies;
+    Neo4jVerInfo supported_version; // holds major and minor versions for server
+    LatencyHistogram latencies;     // latency measurement structure
 
 
     //====================
     // utilities
     //====================
     LBStatus Poll_Writable();
-    LBStatus Poll_Readable();
+    LBStatus Poll_Readable(DecoderTask& task);
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
-    LBStatus Decode_Response(u8* view, const u32 bytes);
+    LBStatus Decode_Response(DecoderTask& task);
     int Get_Client_ID() const;
-    LBStatus Send_Hellov5();
+    LBStatus Send_Hellov5(QueryState s);
     LBStatus Send_Hellov4();
     LBStatus Flush();
 
     bool Is_Record_Done(DecoderTask& v);
-    bool Encode_And_Flush(QueryState s, BoltMessage& v);
+    bool Encode_And_Flush(BoltMessage& v);
     LBStatus Negotiate_Version();
 
     // state based handlers

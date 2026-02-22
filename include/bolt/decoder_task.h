@@ -72,6 +72,7 @@ struct DecoderTask
     QueryState state;       // current state of the query
     BoltView view;          // view into the buffer for this query
     BoltResult result;      // results of bolt values
+	int prev_bytes{ 0 };    // bytes left over from the previous batch, used for streaming queries
 
     std::chrono::_V2::system_clock::time_point start_clock = 
         std::chrono::high_resolution_clock::now();  // starting point for timer, always now!
@@ -79,6 +80,7 @@ struct DecoderTask
 
     DecoderTask() = default;
     DecoderTask(QueryState s) : state(s) { }
+	DecoderTask(QueryState s, std::function<void(BoltResult&)> c) : state(s), cb(c) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

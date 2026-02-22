@@ -20,20 +20,6 @@
 //          ENUM & TYPES
 //===============================================================================|
 /**
- * @brief authentication schemes supported by neo4j server and understood by the cell.
- */
-static constexpr char* SCHEME_BASIC = "basic";
-static constexpr char* SCHEME_KERBEROS = "kerberos";
-static constexpr char* SCHEME_BEARER = "bearer";
-static constexpr char* SCHEME_NONE = "none";
-
-static constexpr char* SCHEME_STRING = "scheme";
-static constexpr char* PRINCIPAL_STRING = "principal";
-static constexpr char* CREDENTIALS_STRING = "credentials";
-static constexpr char* EXTRAS_STRING = "extras";
-
-
-/**
  * @brief command types for my cellular model
  */
 enum class CellCmdType
@@ -68,88 +54,6 @@ struct CellCommand
 };
 
 
-/**
- * @brief helper functions to create authentication tokens for different
- *  schemes supported by neo4j server. The functions return a BoltValue
- *  of type Map with the right keys and values for the given scheme.
- */
-namespace Auth
-{
-    /**
-     * @brief creates a BoltValue of type Map with the right keys and values for
-     *  basic authentication scheme supported by neo4j server. The map contains
-     *  the following keys: "scheme", "principal" and "credentials" with their
-     *  corresponding values.
-     * 
-	 * @param user the username for basic authentication
-	 * @param password the password for basic authentication
-     * 
-	 * @return a BoltValue of type Map with the right keys and values for basic
-	 */
-    inline BoltValue Basic(const char* user, const char* password)
-    {
-        return BoltValue({
-            mp(SCHEME_STRING, SCHEME_BASIC),
-            mp(PRINCIPAL_STRING, user),
-            mp(CREDENTIALS_STRING, password)
-            });
-    } // end Basic
-
-
-    /**
-     * @brief creates a BoltValue of type Map with the right keys and values for
-     *  kerberos authentication scheme supported by neo4j server. The map contains
-     *  the following keys: "scheme" and "credentials" with their corresponding
-     *  values.
-     * 
-	 * @param base64_ticket a base64 encoded kerberos ticket for authentication
-     * 
-	 * @return a BoltValue of type Map with the right keys and values for kerberos
-	 */
-    inline BoltValue Kerberos(const char* base64_ticket)
-    {
-        return BoltValue({
-            mp(SCHEME_STRING, SCHEME_KERBEROS),
-            mp(CREDENTIALS_STRING, base64_ticket)
-            });
-	} // end Kerberos
-
-
-    /**
-     * @brief creates a BoltValue of type Map with the right keys and values for
-     *  bearer authentication scheme supported by neo4j server. The map contains
-     *  the following keys: "scheme" and "credentials" with their corresponding
-     *  values.
-     * 
-	 * @param token a bearer token for authentication
-     * 
-	 * @return a BoltValue of type Map with the right keys and values for bearer
-	 */
-    inline BoltValue Bearer(const char* token)
-    {
-        return BoltValue({
-            mp(SCHEME_STRING, SCHEME_BEARER),
-            mp(CREDENTIALS_STRING, token)
-            });
-    } // end Bearer
-
-
-    /**
-     * @brief creates a BoltValue of type Map with the right keys and values for
-     *  none authentication scheme supported by neo4j server. The map contains
-     *  the following key: "scheme" with its corresponding no value.
-     * 
-	 * @return a BoltValue of type Map with the right keys and values for none
-	 */
-    inline BoltValue None()
-    {
-        return BoltValue({
-            mp(SCHEME_STRING, SCHEME_NONE)
-            });
-	} // end None
-} // end AuthToken
-
-
 //===============================================================================|
 //          CLASS
 //===============================================================================|
@@ -170,7 +74,7 @@ public:
     int Get_Socket() const;
     int Get_Try_Count() const;
     int Get_Max_Try_Count() const;
-    u64 Get_Connection_Time() const;
+
     u64 Percentile(double p) const;
     u64 Wall_Latency() const;
 
@@ -189,22 +93,22 @@ private:
     int max_tries;          // the maximum number of retries allowed; default to 5
 
     std::atomic<bool> running;  // thread loop controller
-    std::atomic<bool> esleep;   // when true encoder thread is sleeping.
-    std::atomic<bool> dsleep;   // when true it as well means decoder thread is sleeping
+    std::atomic<int> esleep;   // when true encoder thread is sleeping.
+    std::atomic<int> dsleep;   // when true it as well means decoder thread is sleeping
     std::string last_error;     // a string version of last error occured either from neo4j or internal
 
     std::thread encoder_thread; // writer thread id
     std::thread decoder_thread; // reader therad id
 
     NeoConnection connection;           // a connection instance; either standalone or routed
-    
-    s64 connect_duration;               // microseconds it took to tcp connect +/- ssl connect + version negotiation + HELLO +/- LOGON
     LockFreeQueue<CellCommand> equeue;  // request queue for the cell
+    LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query responses
+
 
     void Encoder_Loop();
     void Decoder_Loop();
     void EWake();
-    void Sleep(std::atomic<bool>& s);
+    void Sleep(std::atomic<int>& s);
     void Set_Running(const bool state);
 
     bool Is_Running() const;

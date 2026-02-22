@@ -41,7 +41,7 @@ int main()
             Fatal("%s", driver.Get_Last_Error().c_str());
 
         Utils::Print("Connected %d times and completed in %ld milliseconds",
-            (int)(i + 1), pcell->Get_Connection_Time());
+            (int)(i + 1), pcell->Wall_Latency());
 
         driver.Close();
         Utils::Print("Disconnected");

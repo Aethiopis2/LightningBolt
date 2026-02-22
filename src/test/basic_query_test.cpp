@@ -61,6 +61,7 @@ void Test_Record_Fetch()
         if (!pcell)
             Fatal("%s", driver.Get_Last_Error().c_str());
         Test test;
+        pcell->Clear_Histo();
 
         for (size_t k = 0; k < NUM_TESTS; k++)
         {
@@ -77,10 +78,10 @@ void Test_Record_Fetch()
                     break;
                 } // end if
 
-                Utils::Print("Fields: %s", out.fields.ToString().c_str());
+               /* Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
                     Utils::Print("Records: %s", v.ToString().c_str());
-                Utils::Print("Summary: %s", out.summary.ToString().c_str());
+                Utils::Print("Summary: %s", out.summary.ToString().c_str());*/
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
@@ -92,6 +93,13 @@ void Test_Record_Fetch()
                 int64_t avg = total / static_cast<int64_t>(durs.size());
                 Utils::Print("cypher: %s%s\truns: %dx\tAvg time: %lld \u00B5s", test.cypher[k],
                     test.spaces[k], test.rounds[k], avg);
+
+				std::cout << "\nHistogram latencies: ";
+				std::cout << "\np50: " << pcell->Percentile(0.50) << " ms\n";
+				std::cout << "p95: " << pcell->Percentile(0.95) << " ms\n";
+				std::cout << "p99: " << pcell->Percentile(0.99) << " ms\n";
+				std::cout << "Wall Latency: " << pcell->Wall_Latency() << " ms\n";
+				pcell->Clear_Histo();
             } // end if 
             else
             {
