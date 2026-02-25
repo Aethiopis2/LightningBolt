@@ -31,10 +31,12 @@ static std::atomic<int> records{ 0 };
 void FetchCallbackFn(BoltResult& res)
 {
     /*std::cout << "=======================\n";
-      std::cout << "thread id: " << res.client_id << "\n";*/
+      std::cout << "thread id: " << res.client_id << "\n";
+      std::cout << res.fields.ToString() << "\n";*/
       for (auto v : res);
-        /*Utils::Print("Records: %s", v.ToString().c_str());
-    std::cout << "=======================\n";*/
+        //Utils::Print("Records: %s", v.ToString().c_str());
+    /*std::cout << res.summary.ToString() << "\n";
+    std::cout << "=======================\n"; */
 
     records.fetch_add(static_cast<int>(res.message_count), std::memory_order_relaxed);
     completed.fetch_add(1, std::memory_order_relaxed);
@@ -45,9 +47,9 @@ int main()
 {
     constexpr int QUERY_COUNT = 1000;
     std::string url = "bolt://localhost:7687";
-    BoltValue basic = Auth::Basic("neo4j", "");
+    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
 
-    NeoDriver driver(url, basic, BoltValue::Make_Map(), 1);
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 2);
 
 
     auto start = std::chrono::high_resolution_clock::now();

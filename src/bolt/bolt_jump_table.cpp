@@ -91,7 +91,9 @@ static inline bool Decode_False(u8*& pos, BoltValue& out)
  */
 static inline bool Decode_Tiny_Int(u8*& pos, BoltValue& out)
 {
-    out = BoltValue::Make_Int(static_cast<s8>(*pos++));
+    out.type = BoltType::Int;
+    out.int_val = static_cast<s8>(*pos++);
+    out.is_decoded = true; // if appropriate
     return true;
 } // end Decode_Tiny_Int
 
@@ -108,7 +110,9 @@ static inline bool Decode_Tiny_Int(u8*& pos, BoltValue& out)
 template<typename T>
 static inline bool Decode_Int(u8*& pos, BoltValue& out)
 {
+    out.type = BoltType::Int;
     out.Set_Int_RawDirect<T>(++pos);
+    out.is_decoded = true; // if appropriate
     pos += sizeof(T);
 
     return true;

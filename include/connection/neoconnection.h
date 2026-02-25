@@ -101,6 +101,7 @@ private:
     int client_id;          // connection identifier
     int tran_count;		    // number of transactions executed; simulates nesting
     int prev_remaining = 0;
+	int current_msg_len = 0;   // length of the current message being decoded; used for partial decoding
 
     std::atomic<bool> is_done;  // determines if the next decoding batch is done
 
@@ -119,9 +120,9 @@ private:
     // utilities
     //====================
     LBStatus Poll_Writable();
-    LBStatus Poll_Readable(DecoderTask& task);
+    LBStatus Poll_Readable();
+    LBStatus Decode_One(DecoderTask& task);
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
-    LBStatus Decode_Response(DecoderTask& task);
     int Get_Client_ID() const;
     LBStatus Send_Hellov5(QueryState s);
     LBStatus Send_Hellov4();

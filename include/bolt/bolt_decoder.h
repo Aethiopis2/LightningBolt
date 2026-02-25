@@ -87,7 +87,7 @@ public:
     {
 		v.buf = &buf;
         u16 chunk = *((u16*)view_start);
-        u16 chunk_size = htons(chunk);
+        u16 chunk_size = ntohs(chunk);
 
         u8* pos = view_start + 2;
         while (chunk_size > (pos - view_start))
@@ -118,7 +118,7 @@ public:
     {
 		msg.msg.buf = &buf;
         u16 chunk = *((u16*)buf.Read_Ptr());
-        msg.chunk_size = htons(chunk);
+        msg.chunk_size = ntohs(chunk);
         buf.Consume(2);
         
         u8* start = buf.Read_Ptr();
@@ -155,7 +155,7 @@ public:
     {
 		msg.msg.buf = &buf;
         u16 chunk = *((u16*)view_start);
-        msg.chunk_size = htons(chunk);
+        msg.chunk_size = ntohs(chunk);
 
         u8* pos = view_start + 2;
         while (msg.chunk_size > (pos - view_start))
@@ -173,7 +173,26 @@ public:
         return LB_OK_INFO(consumed);
     } // end Decode overloaded
 
-private:
+    
+    /**
+     * @brief Decodes a bolt message from the internal buffer starting at the given offset.
+     *
+     * @param offset the offset in the internal buffer to start decoding from
+     * @param bv reference to output decoded bolt value
+     *
+     * @returns LB_OK_INFO containing the number of bytes decoded or fail as protocol
+     *  violation.
+	 */ 
+    LBStatus Decode(size_t offset, BoltValue& bv)
+    {
+        BoltMessage msg;
+        LBStatus rc = Decode(buf.Data() + offset, msg);
+        bv = std::move(msg.msg);
+        return rc;
+	} // end Decode with offset
+
+
+//private:
 
     BoltBuf& buf;
 }; 

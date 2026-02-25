@@ -201,7 +201,6 @@ void NeoDriver::Poll_Read()
 					break;
 				}
 
-				// ready to read
 				cell->DWake();	// wake the decoder thread
 			} // end if readable
 		} // end for nfds

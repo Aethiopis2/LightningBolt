@@ -6,7 +6,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native")
 
 add_library(driver SHARED
     src/connection/tcp_client.cpp
-    src/connection/neoconnection.cpp
+    "src/connection/neoconnection.cpp"
     src/neocell.cpp
     src/bolt/bolt_encoder.cpp
     src/bolt/bolt_decoder.cpp
@@ -51,3 +51,10 @@ set_target_properties(basic_query_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMA
 add_executable(async_qbenchmark_test src/test/async_qbenchmark_test.cpp)
 target_link_libraries(async_qbenchmark_test driver)
 set_target_properties(async_qbenchmark_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+
+# async qery testII - measures latencies p50, p95 and p99 for 
+# async pooled connection and async callback functionality
+add_executable(percentile_test src/test/percentile_test.cpp)
+target_link_libraries(percentile_test driver)
+set_target_properties(percentile_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

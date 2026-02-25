@@ -103,6 +103,7 @@ private:
     NeoConnection connection;           // a connection instance; either standalone or routed
     LockFreeQueue<CellCommand> equeue;  // request queue for the cell
     LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query responses
+	LockFreeQueue<BoltResult> rqueue;   // queue of results ready to be fetched by the user
 
 
     void Encoder_Loop();
@@ -112,4 +113,5 @@ private:
     void Set_Running(const bool state);
 
     bool Is_Running() const;
+	LBStatus Decode_Response(u8* ptr, const size_t bytes);
 };

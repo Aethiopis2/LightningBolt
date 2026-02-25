@@ -75,12 +75,12 @@ LBStatus NeoCell::Start(const int id)
 	connection.Wait_Task();
 
 	// check decoded value
-	auto t = tasks.Dequeue();
+	auto t = rqueue.Dequeue();
 	if (t.has_value())
 	{
-		if (t->result.Is_Error())
+		if (t->Is_Error())
 		{
-			last_error = t->result.err.ToString();
+			last_error = t->err.ToString();
 			return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_NEO4J);
 		} // end if failed
 	} // end if
@@ -115,16 +115,17 @@ int NeoCell::Enqueue_Request(CellCommand&& cmd)
 
 int NeoCell::Fetch(BoltResult& results)
 {
-	// wait for at least one full message
 	do
 	{
+		// wait for at least one full message
 		connection.Wait_Task();
-		auto task = tasks.Dequeue();
-		if (!task.has_value())
+
+		auto result = rqueue.Dequeue();
+		if (!result.has_value())
 			return -1;
 
-		results = std::move(task->result);
-	} while (!tasks.Is_Empty());
+		results = std::move(result.value());
+	} while (!rqueue.Is_Empty());
 
 	return 0;
 } // end Fetch
@@ -328,37 +329,48 @@ void NeoCell::Encoder_Loop()
  */
 void NeoCell::Decoder_Loop()
 {
-	bool has_more = false;		// used to indicate if we need to poll more
+	bool begin_decode = true;		// used to indicate if we need to poll more
 	LBStatus rc = LB_Make();	// 0k
 
 	while (Is_Running())
 	{
-		if (!tasks.Is_Empty() || has_more)
+		if (!tasks.Is_Empty())
 		{
-			auto task = tasks.Front();
-			if (!task.has_value()) continue;	// should not happen but just in case
-
-			rc = connection.Poll_Readable(task.value());
+			rc = connection.Poll_Readable();
 			LBAction action = LBAction(LB_Action(rc));
 			LBDomain domain = LBDomain(LB_Domain(rc));
 
-			if ((action == LBAction::LB_FAIL && (domain == LBDomain::LB_DOM_SYS || 
+			if (action == LBAction::LB_OK)
+			{
+				rc = Decode_Response(connection.read_buf.Read_Ptr(), LB_Aux(rc));
+				if (!LB_OK(rc))
+				{
+					if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
+					{
+						Set_Running(false);
+						EWake();
+						break;
+					} // end if fail
+					else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
+					{
+						connection.read_buf.Consume(LB_Aux(rc));
+						continue;	// keep polling if we have more to decode
+					} // end else
+				} // end if decode error
+
+				connection.read_buf.Consume(LB_Aux(rc));
+				if (tasks.Is_Empty())
+					connection.read_buf.Reset();		// reset buffer if no more tasks
+			} // end if begin decode
+			else if ((action == LBAction::LB_FAIL && (domain == LBDomain::LB_DOM_SYS ||
 				domain == LBDomain::LB_DOM_SSL)) ||
-				(action == LBAction::LB_RETRY && domain == LBDomain::LB_DOM_SYS) )
+				(action == LBAction::LB_RETRY && domain == LBDomain::LB_DOM_SYS))
 			{
 				Set_Running(false);
 				EWake();
 				break;
 			} // end if readable
-			else if (action == LBAction::LB_HASMORE)
-			{
-				has_more = true;
-				continue;
-			} // end else waiting for more
-	
-			has_more = false;
-			if (tasks.Is_Empty())
-				connection.read_buf.Reset();		// reset buffer if no more tasks
+
 		} // end if
 		else Sleep(dsleep);	// wait it out till notified.
 	} // end while running
@@ -435,3 +447,75 @@ bool NeoCell::Is_Running() const
 {
 	return running.load(std::memory_order_acquire);
 } // end Is_Running
+
+
+LBStatus NeoCell::Decode_Response(u8* ptr, const size_t bytes)
+{
+	size_t decoded = 0; // tacks decoded bytes thus far
+	LBStatus rc = 0;    // holds return values
+
+	//Utils::Dump_Hex((const char*)ptr, bytes);
+
+	auto task = tasks.Front();
+	int total_decode = bytes + task->get().prev_bytes;
+	task->get().prev_bytes = 0;				// reset the left over bytes for the next batch
+	task->get().view.cursor = ptr;			// set the cursor to the start of the buffer
+	task->get().view.size = total_decode;	// set the size to the number of bytes received
+
+	while (decoded < total_decode)
+	{
+		rc = connection.Can_Decode(task->get().view.cursor, total_decode - decoded);
+		if (!LB_OK(rc))
+		{
+			if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
+			{
+				task->get().prev_bytes = total_decode - decoded;	// set the left over bytes for the next batch
+				return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
+					LBCode::LB_CODE_NONE, decoded);
+			} // end if appended info
+
+			return rc;
+		} // end if cannot decode
+
+		rc = connection.Decode_One(task.value());
+		LBAction action = LBAction(LB_Action(rc));
+		u32 aux = LB_Aux(rc);
+		if (action != LBAction::LB_OK && action != LBAction::LB_HASMORE)
+			return rc;
+
+		decoded += aux;					// get the number of bytes decoded and add it to the total
+		task->get().view.cursor += aux;	// move the cursor forward by the number of bytes decoded
+
+		// are done with this task?
+		if (task->get().is_done)
+		{
+			if (task->get().cb)
+			{
+				task->get().cb(task->get().result);
+			} // end if callback
+			else
+			{
+				// move the result to the result queue for user to fetch
+				rqueue.Enqueue(std::move(task->get().result));
+				connection.Wake();
+			} // end else
+			
+			// clock latency
+			connection.latencies.Record_Latency(
+				std::chrono::high_resolution_clock::now() -
+				task->get().start_clock
+			);
+
+			tasks.Dequeue();		// remove the task from the queue
+			task = tasks.Front();	// get the next task to process
+			if (!task.has_value()) break;	// no more tasks to process
+
+			// set it up for the next task
+			task->get().view.cursor = ptr + decoded;	// move the cursor to the next position
+			task->get().view.size = bytes - decoded;	// set the remaining size to decode for the next task
+		} // end if done
+		
+	} // end while
+
+	return LB_OK_INFO(decoded);
+} // end Decode_Response

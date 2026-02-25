@@ -22,7 +22,7 @@
 #include <atomic>
 #include <thread>
 #include <cmath>
-#include "neopool.h"
+#include "neodriver.h"
 
 
 
@@ -79,26 +79,21 @@ void FetchCallbackFn(BoltMessage* msg, int status, void*)
 
 int main()
 {
-    NeoCellPool pool(
-        4,
-        BoltValue({
-            mp("host", "localhost:7687"),
-            mp("username", "neo4j"),
-            mp("password", ""),
-            mp("encrypted", "false")
-        })
-    );
+    std::string url = "bolt://localhost:7687";
+    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
 
-    pool.Start();
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 1);
+
 
     std::atomic<int> index{0};
 
     auto wall_start = std::chrono::high_resolution_clock::now();
+    NeoCell* cell = driver.Get_Session();
+    cell->Clear_Histo();
 
     for (int i = 0; i < QUERY_COUNT; ++i)
     {
-        NeoCell* cell = pool.Acquire();
-
+        
         int slot = index.fetch_add(1, std::memory_order_relaxed);
 
         ctx.push_back({
@@ -130,7 +125,13 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
     auto wall_end = std::chrono::high_resolution_clock::now();
-    pool.Stop();
+
+    std::cout << "Histogram Latency percentiles (ms)\n";
+    std::cout << "P50: " << cell->Percentile(0.50) << "\n";
+    std::cout << "P95: " << cell->Percentile(0.95) << "\n";
+    std::cout << "P99: " << cell->Percentile(0.99) << "\n";
+
+    driver.Close();
 
     // -------------------- stats --------------------
 

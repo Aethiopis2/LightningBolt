@@ -557,7 +557,7 @@ LBStatus NeoConnection::Poll_Writable()
  *
  * @return a true on success
  */
-LBStatus NeoConnection::Poll_Readable(DecoderTask& task)
+LBStatus NeoConnection::Poll_Readable()
 {
     LBStatus rc;        // store's return value
 
@@ -573,34 +573,50 @@ LBStatus NeoConnection::Poll_Readable(DecoderTask& task)
 
     rc = Recv(read_buf.Write_Ptr(), read_buf.Writable_Size());
     if (!LB_OK(rc))
-        return rc;
+        return rc; // fail, retry or wait
 
     int bytes = LB_Aux(rc);
     read_buf.Advance(bytes);
-
-    // setup the task structure for decoder
-    bytes += task.prev_bytes;
-    task.prev_bytes = 0;
-
-	task.view.cursor = read_buf.Read_Ptr();
-	task.view.size = bytes;
-
-    // if data is completely received push to response handler
-    rc = Decode_Response(task);
-    if (!LB_OK(rc))
-    {
-        if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
-        {
-            task.prev_bytes = bytes - LB_Aux(rc);
-            read_buf.Consume(LB_Aux(rc));
-		} // end if has more
-		
-        return rc;
-    } // end if
-
-    read_buf.Consume(LB_Aux(rc));
-    return LB_Make();
+    return LB_OK_INFO(bytes);
 } // end Poll_Readable
+
+
+/**
+ * @brief persuming that data has been fully received from Poll_Readable(), the
+ *  function decodes the bolt encoded responses (message).
+ */
+LBStatus NeoConnection::Decode_One(DecoderTask& task)
+{
+	LBStatus rc;    // holds return value
+    u8 s = static_cast<u8>(task.state);
+    u8 tag = task.view.cursor[3];
+
+    switch (tag)
+    {
+    case BOLT_SUCCESS:
+        rc = (this->*success_handler[s])(task);
+        break;
+
+    case BOLT_FAILURE:
+        rc = Handle_Failure(task);
+        break;
+
+    case BOLT_RECORD:
+        rc = Handle_Record(task);
+        break;
+
+    case BOLT_IGNORED:
+        rc = Handle_Ignored(task);
+        break;
+
+    default:
+        //err_string = "protocol error, unknown tag: %d" + std::to_string(tag);
+        return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
+            LBCode::LB_CODE_PROTO);
+    } // end switch
+
+    return rc;
+} // end Decode_Response
 
 
 /**
@@ -613,26 +629,26 @@ LBStatus NeoConnection::Poll_Readable(DecoderTask& task)
  */
 LBStatus NeoConnection::Can_Decode(u8* view, const u32 bytes_remain)
 {
-	u16 temp, msg_len = 0;  // vars
+    u16 temp;  // vars
 
     if (bytes_remain <= 4)
         return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT);   // didn't even get the header, bolt in practice has a min of 7
 
-	// get the message size from the header
+    // get the message size from the header
     memcpy(&temp, view, sizeof(u16));
-	msg_len = ntohs(temp) + 2;      // message size + header size
+    current_msg_len = ntohs(temp) + 2;      // message size + header size
 
     // padding?
-    if ((msg_len + 2) <= bytes_remain)
+    if ((current_msg_len + 2) <= bytes_remain)
     {
-        if (reinterpret_cast<u16*>(view + msg_len)[0] == 0)
-            msg_len += 2;
+        if (reinterpret_cast<u16*>(view + current_msg_len)[0] == 0)
+            current_msg_len += 2;
     } // end if enough bytes for padding too
     else
         return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT);
 
     // sweet, now make sure this is a proper bolt packet by
-	//  checking the signature byte, if not then it's a protocol error
+    //  checking the signature byte, if not then it's a protocol error
     if ((0xB0 & view[2]) != 0xB0)
     {
         return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
@@ -640,68 +656,8 @@ LBStatus NeoConnection::Can_Decode(u8* view, const u32 bytes_remain)
     } // end if not valid
 
     // we can decode it
-	return LB_OK_INFO(msg_len);
+    return LB_OK_INFO(current_msg_len);
 } // end Can_Decode
-
-
-/**
- * @brief persuming that data has been fully received from Poll_Readable(), the
- *  function decodes the bolt encoded responses (message).
- */
-LBStatus NeoConnection::Decode_Response(DecoderTask& task)
-{
-    //Utils::Dump_Hex((const char*)task.view.cursor, task.view.size);
-    size_t decoded = 0; // tacks decoded bytes thus far
-    LBStatus rc = 0;    // holds return values
-
-    while (decoded < task.view.size)
-    {
-		rc = Can_Decode(task.view.cursor, task.view.size - decoded);
-        if (!LB_OK(rc))
-        {
-            if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
-            {
-                return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
-                    LBCode::LB_CODE_NONE, decoded);
-			} // end if protocol error
-
-            return rc; 
-		} // end if can't decode
-
-        u8 s = static_cast<u8>(task.state);
-        u8 tag = task.view.cursor[3];
-
-        switch (tag)
-        {
-        case BOLT_SUCCESS:
-            rc = (this->*success_handler[s])(task);
-            break;
-
-        case BOLT_FAILURE:
-            rc = Handle_Failure(task);
-            break;
-
-        case BOLT_RECORD:
-            rc = Handle_Record(task);
-            break;
-
-        case BOLT_IGNORED:
-            rc = Handle_Ignored(task);
-            break;
-
-        default:
-            //err_string = "protocol error, unknown tag: %d" + std::to_string(tag);
-            return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
-                LBCode::LB_CODE_PROTO);
-        } // end switch
-
-		int decoded_bytes = LB_Aux(rc);
-        task.view.cursor += decoded_bytes;
-        decoded += decoded_bytes;
-    } // end while
-
-    return LB_OK_INFO(decoded);
-} // end Decode_Response
 
 
 /**
@@ -1025,7 +981,7 @@ inline LBStatus NeoConnection::Success_Hello(DecoderTask& task)
         std::chrono::high_resolution_clock::now() - 
         task.start_clock
     ); 
-    Wake();
+	task.is_done = true;            // mark done for waiters
     return LB_OK_INFO(size);
 } // end Success_Hello
 
@@ -1050,8 +1006,8 @@ inline LBStatus NeoConnection::Success_Run(DecoderTask& task)
     if (!LB_OK(rc))
         return rc;
 
-    task.result.pool = GetBoltPool<BoltValue>();
-    task.result.start_offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
+    task.result.pdec = &decoder;
+	task.result.start_offset = (task.view.cursor + LB_Aux(rc)) - read_buf.Data();
 
     return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
         LBCode::LB_CODE_NONE, LB_Aux(rc));
@@ -1078,20 +1034,8 @@ inline LBStatus NeoConnection::Success_Record(DecoderTask& task)
         return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
             LBCode::LB_CODE_NONE, LB_Aux(rc));
 
-    if (task.cb)
-    {
-        task.cb(task.result);
-    } // end if callback
-    else
-    {
-        Wake();     // waiting threads
-    } // end else
-
-    latencies.Record_Latency(
-        std::chrono::high_resolution_clock::now() - 
-        task.start_clock
-    );
-    return LB_OK_INFO(LB_Aux(rc)); // should be LB_OK_INFO
+	task.is_done = true;            // mark done for waiters on the same thread
+    return LB_OK_INFO(LB_Aux(rc));  // should be LB_OK_INFO
 } // end Success_Record
 
 
@@ -1126,13 +1070,12 @@ inline LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 inline LBStatus NeoConnection::Handle_Record(DecoderTask& task)
 {
     task.state = QueryState::Streaming;
-    BoltMessage rec;
-    LBStatus rc = decoder.Decode(task.view.cursor, rec);
+    /*LBStatus rc = decoder.Decode(task.view.cursor, rec);
     if (!LB_OK(rc))
-        return rc;
+        return rc;*/
 
-    GetBoltPool<BoltValue>()->Get(task.result.start_offset + task.result.message_count)[0] = std::move(rec.msg);
     task.result.message_count++;
+	task.result.total_bytes += current_msg_len;
     /*if (task.cb)
     {
         task.cb(task.result);
@@ -1141,7 +1084,7 @@ inline LBStatus NeoConnection::Handle_Record(DecoderTask& task)
     task.result.client_id = client_id;*/
 
     return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
-        LBCode::LB_CODE_NONE, LB_Aux(rc));
+        LBCode::LB_CODE_NONE, current_msg_len);
 } // end Success_Record
 
 

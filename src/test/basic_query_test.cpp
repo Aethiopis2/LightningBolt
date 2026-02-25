@@ -50,12 +50,12 @@ std::vector<int64_t> durs;
 
 void Test_Record_Fetch()
 {
-    const size_t iterations = 1;
+    const size_t iterations = 100;
 
     for (size_t i = 0; i < iterations; i++)
     {
         NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", ""));
+            Auth::Basic("neo4j", "tobby@melona"));
         NeoCell* pcell = driver.Get_Session();
 
         if (!pcell)
@@ -78,10 +78,10 @@ void Test_Record_Fetch()
                     break;
                 } // end if
 
-               /* Utils::Print("Fields: %s", out.fields.ToString().c_str());
+                Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
                     Utils::Print("Records: %s", v.ToString().c_str());
-                Utils::Print("Summary: %s", out.summary.ToString().c_str());*/
+                Utils::Print("Summary: %s", out.summary.ToString().c_str());
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
@@ -98,7 +98,7 @@ void Test_Record_Fetch()
 				std::cout << "\np50: " << pcell->Percentile(0.50) << " ms\n";
 				std::cout << "p95: " << pcell->Percentile(0.95) << " ms\n";
 				std::cout << "p99: " << pcell->Percentile(0.99) << " ms\n";
-				std::cout << "Wall Latency: " << pcell->Wall_Latency() << " ms\n";
+                std::cout << "Wall Latency: " << pcell->Wall_Latency() << " ms\n";
 				pcell->Clear_Histo();
             } // end if 
             else
