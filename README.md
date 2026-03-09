@@ -39,7 +39,7 @@ Running test samples (build directory):
 
 
 Project Structure:
-
+```
 |- include
    |- bolt
       |- boltvalue.h		# definition of bolt pack stream wrappers
@@ -86,7 +86,7 @@ Project Structure:
    |- neodriver.cpp		# main driver module implementation
    |- neopool.cpp		# pool of NeoCell connections with load balancing implementation
    |- neoerr.cpp		# implementation of error handlers and display functions
-
+```
 
 Bolt Protocol:
 
@@ -272,7 +272,7 @@ encoding of nulls, bools, ints, floats, strings, byte arrays, lists, maps, struc
 to a BoltValue of type struct with preceeding 16-bit chunk size and optionally appended with 16-bit padding. I have added bolt type
 of Unknown for clarity and testing of null values. So how well does this encoder perform, below is a sample benchmark for encoding
 all the supported types. The example is found at `src/test/encoder_decoder_test.cpp`.
-
+```
 Encoding Benchmark (1000000 iterations)
 -----------------------------------------------
 Operation             Avg Time (ns)     Throughput (ops/sec)
@@ -287,7 +287,7 @@ List                        129.694              7.71048e+06
 Map                         138.448               7.2229e+06
 Struct                      241.898              4.13398e+06
 Message                     318.162              3.14305e+06
-
+```
 *Note: Compound types such as maps and structs were tested on deeply nested structures as the above
 	BoltValue snap shows in section BoltValue.
 
@@ -303,7 +303,7 @@ bytes consumed by the decoder. The reason for splitting the decoder with its jum
 viz BoltValue, which happens also to require decoding functionality when converting BoltValue's to strings. In a sense LightningBolt decodes
 twice, once during recv and the intial decode, and second when fetching compound types such as lists, maps, and structs.
 Below is decoder benchmarks for all types supported, from `src/test/encoder_decoder_test.cpp`.
-
+```
 Decoding Benchmark (1000000 iterations)
 -----------------------------------------------
 Operation             Avg Time (ns)     Throughput (ops/sec)
@@ -318,7 +318,7 @@ List                        72.9345              1.37109e+07
 Map                         56.1464              1.78106e+07
 Struct                      134.255              7.44851e+06
 Message                     135.823               7.3625e+06
-
+```
 
 ## TcpClient
 
