@@ -1,13 +1,9 @@
 /**
- * @brief small test module to test speed of query running and fetching
- * 
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.2
- * @date 9th of April 2025, Wednesday
- *
- * @copyright Copyright (c) 2025
- *
+ * @date created 9th of April 2025, Wednesday
+ * @date updated 26th of Feburary 2026, Thrusday
  */
 
 
@@ -55,7 +51,7 @@ void Test_Record_Fetch()
     for (size_t i = 0; i < iterations; i++)
     {
         NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", "tobby@melona"));
+            Auth::Basic("neo4j", ""));
         NeoCell* pcell = driver.Get_Session();
 
         if (!pcell)
@@ -68,20 +64,22 @@ void Test_Record_Fetch()
             for (u64 j = 0; j < test.rounds[k]; j++)
             {
                 auto start = std::chrono::high_resolution_clock::now();
-                pcell->Enqueue_Request({ CellCmdType::Run, test.cypher[k] });
+                pcell->Run(test.cypher[k]);
 
                 BoltResult out;
                 int ret = pcell->Fetch(out);
                 if (out.Is_Error())
                 {
-                    Fatal("%s", out.err.ToString().c_str());
-                    break;
+                    Dump_App_Err("%s", out.err.ToString().c_str());
+                    continue;
                 } // end if
 
+#ifdef _DEBUG
                 Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
                     Utils::Print("Records: %s", v.ToString().c_str());
                 Utils::Print("Summary: %s", out.summary.ToString().c_str());
+#endif
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());

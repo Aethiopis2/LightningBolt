@@ -30,7 +30,7 @@ class NeoCellPool
 {
 public:
 
-	NeoCellPool(size_t nworkers, std::string& urls,
+	NeoCellPool(int epfd, size_t nworkers, std::string& urls,
 		BoltValue* pauth, 
 		BoltValue* pextras = nullptr);
 

@@ -47,17 +47,17 @@ int main()
 {
     constexpr int QUERY_COUNT = 1000;
     std::string url = "bolt://localhost:7687";
-    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
+    BoltValue basic = Auth::Basic("neo4j", "");
 
-    NeoDriver driver(url, basic, BoltValue::Make_Map(), 2);
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 8);
 
 
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) 
 		driver.Execute_Async(
-            "UNWIND range(1,100) AS n RETURN n", 
-            FetchCallbackFn
+            FetchCallbackFn,
+            "UNWIND range(1,100) AS n RETURN n"
         );
 
     while (completed.load() < QUERY_COUNT)

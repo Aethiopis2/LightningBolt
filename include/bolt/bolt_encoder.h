@@ -3,7 +3,7 @@
  * 
  * @version 1.0
  * @date created 13th of April 2025, Sunday.
- * @date updated 2nd of Feburary 2026, Monday.
+ * @date updated 4th of March 2026, Wednesday.
  */
 #pragma once
 
@@ -199,7 +199,7 @@ private:
 
         // attempt to grow if 2x, if size is not enough
         if (size >= buf.Writable_Size())
-            if (buf.Grow(buf.Capacity() << 1) < 0) return false;
+            if (buf.Grow() < 0) return false;
       
         return true;
     } // end Has_Free

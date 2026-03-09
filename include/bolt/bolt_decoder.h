@@ -64,11 +64,11 @@ public:
             u8 tag = *pos;
             if (!jump_table[tag](pos, out))    
                 return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
-                    LBCode::LB_CODE_PROTO);
+                    LBStage::LB_STAGE_DECODE, LBCode::LB_CODE_PROTO);
         } // end while
         
         buf.Consume(size);
-        return LB_OK_INFO(size);
+        return LBOK_INFO(size);
     } // end Decode
 
 
@@ -101,7 +101,7 @@ public:
         if (*(u16*)(pos) == 0x00)
             consumed += 2;
 
-        return LB_OK_INFO(consumed);
+        return LBOK_INFO(consumed);
     } // end Decode
     
 
@@ -128,7 +128,7 @@ public:
             u8 tag = *pos;
             if (!jump_table[tag](pos, msg.msg))
                 return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
-                    LBCode::LB_CODE_PROTO);
+                    LBStage::LB_STAGE_DECODE, LBCode::LB_CODE_PROTO);
         } // end while
         
 
@@ -136,7 +136,7 @@ public:
             msg.chunk_size += 2;
       
         buf.Consume(msg.chunk_size);
-        return LB_OK_INFO(msg.chunk_size);
+        return LBOK_INFO(msg.chunk_size);
     } // end Decode overloaded
 
 
@@ -163,14 +163,14 @@ public:
             u8 tag = *pos;
             if (!jump_table[tag](pos, msg.msg))
                 return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
-                    LBCode::LB_CODE_PROTO);
+                    LBStage::LB_STAGE_DECODE, LBCode::LB_CODE_PROTO);
         } // end while
 
         u32 consumed = msg.chunk_size + 2;
         if (*(u16*)(pos) == 0x00)
             consumed += 2;
 
-        return LB_OK_INFO(consumed);
+        return LBOK_INFO(consumed);
     } // end Decode overloaded
 
     
@@ -192,7 +192,7 @@ public:
 	} // end Decode with offset
 
 
-//private:
+private:
 
     BoltBuf& buf;
 }; 

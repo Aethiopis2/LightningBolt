@@ -22,30 +22,30 @@
 /**
  * @brief authentication schemes supported by neo4j server and understood by the cell.
  */
-static constexpr char* SCHEME_BASIC = "basic";
-static constexpr char* SCHEME_KERBEROS = "kerberos";
-static constexpr char* SCHEME_BEARER = "bearer";
-static constexpr char* SCHEME_NONE = "none";
+static constexpr char SCHEME_BASIC[] = "basic";
+static constexpr char SCHEME_KERBEROS[] = "kerberos";
+static constexpr char SCHEME_BEARER[] = "bearer";
+static constexpr char SCHEME_NONE[] = "none";
 
-static constexpr char* SCHEME_STRING = "scheme";
-static constexpr char* PRINCIPAL_STRING = "principal";
-static constexpr char* CREDENTIALS_STRING = "credentials";
-static constexpr char* EXTRAS_STRING = "extras";
-static constexpr char* ROUTES_STRING = "routing";
-static constexpr char* USER_AGENT_STRING = "user_agent";
-static constexpr char* BOLT_AGENT_STRING = "bolt_agent";
-static constexpr char* PRODUCT_STRING = "product";
-static constexpr char* PLATFORM_STRING = "platform";
-static constexpr char* LANGUAGE_STRING = "language";
-static constexpr char* PATCH_BOLT_STRING = "patch_bolt";
-static constexpr char* NOTIF_MIN_SEVERITY_STRING = "notifications_minimum_severity";
-static constexpr char* NOTIF_DISABLED_CATS_STRING = "notifications_disabled_categories";
+static constexpr char SCHEME_STRING[] = "scheme";
+static constexpr char PRINCIPAL_STRING[] = "principal";
+static constexpr char CREDENTIALS_STRING[] = "credentials";
+static constexpr char EXTRAS_STRING[] = "extras";
+static constexpr char ROUTES_STRING[] = "routing";
+static constexpr char USER_AGENT_STRING[] = "user_agent";
+static constexpr char BOLT_AGENT_STRING[] = "bolt_agent";
+static constexpr char PRODUCT_STRING[] = "product";
+static constexpr char PLATFORM_STRING[] = "platform";
+static constexpr char LANGUAGE_STRING[] = "language";
+static constexpr char PATCH_BOLT_STRING[] = "patch_bolt";
+static constexpr char NOTIF_MIN_SEVERITY_STRING[] = "notifications_minimum_severity";
+static constexpr char NOTIF_DISABLED_CATS_STRING[] = "notifications_disabled_categories";
 
 
 // application defined
-static constexpr char* PRODUCT_VALUE = "LightningBolt/v1.0.0";
-static constexpr char* PLATFORM_VALUE = "Linux Debian 12; x64";
-static constexpr char* LANGUAGE_VALUE = "C++/20";
+static constexpr char PRODUCT_VALUE[] = "LightningBolt/v1.0.0";
+static constexpr char PLATFORM_VALUE[] = "Linux Debian 12; x64";
+static constexpr char LANGUAGE_VALUE[] = "C++/20";
 
 
 /**

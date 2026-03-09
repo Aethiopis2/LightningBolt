@@ -28,11 +28,11 @@
 /**
  * @brief constructor
  */
-NeoCellPool::NeoCellPool(size_t nworkers, std::string& urls, BoltValue* pauth,
+NeoCellPool::NeoCellPool(int epfd, size_t nworkers, std::string& urls, BoltValue* pauth,
 	BoltValue* pextras)
 {
 	for (size_t i = 0; i < nworkers; ++i)
-		workers.emplace_back(new NeoCell(urls, pauth, pextras));
+		workers.emplace_back(new NeoCell(epfd, urls, pauth, pextras));
 } // end constructor
 
 
@@ -54,14 +54,14 @@ LBStatus NeoCellPool::Start(const bool all_connections)
 		// start the next connection on the pool if not already
 		//	running
 		int idx = idx_counter.load(std::memory_order_acquire) % workers.size();
-		rc = workers[idx].get()->Start(idx);
+		rc = workers[idx].get()->Start_Session(idx);
 	} // end if start a single connection only
 	else
 	{
 		int id = 1;
 		for (auto& w : workers)
 		{
-			rc = w->Start(id++);
+			rc = w->Start_Session(id++);
 			if (!LB_OK(rc))
 				return rc;
 		} // end foreach workers

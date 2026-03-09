@@ -63,8 +63,8 @@ void QueryLatencyCallback(BoltResult& res)
     uint64_t end = now_ns();
     int s = records.load();
 
-    latencies_ns[ctx[s].slot] = end - ctx[s].start_ns;
-    records.fetch_add(1, std::memory_order_relaxed);
+    //latencies_ns[ctx[s].slot] = end - ctx[s].start_ns;
+    records.fetch_add(res.message_count, std::memory_order_relaxed);
     completed.fetch_add(1, std::memory_order_relaxed);
 
 }
@@ -102,22 +102,16 @@ int main()
         });
 
         {
-            CellCommand cmd;
+            /*CellCommand cmd;
             cmd.type = CellCmdType::Run;
-            cmd.cypher = "UNWIND range(1,100) AS n RETURN n";
+            cmd.cypher = ;
             cmd.params = BoltValue::Make_Map();
             cmd.extras = BoltValue::Make_Map();
-            cmd.cb = QueryLatencyCallback;
+            cmd.cb = QueryLatencyCallback;*/
             //cmd.ctx = ctx;
-            cell->Enqueue_Request(std::move(cmd));
+            cell->Run_Async(QueryLatencyCallback, "UNWIND range(1,100) AS n RETURN n");
         }
 
-       /* {
-            CellCommand cmd;
-            cmd.type = CellCmdType::Fetch;
-            cmd.fetch_cb = FetchCallbackFn;
-            cell->Enqueue(std::move(cmd));
-        }*/
     }
 
     // wait for completion
@@ -130,6 +124,8 @@ int main()
     std::cout << "P50: " << cell->Percentile(0.50) << "\n";
     std::cout << "P95: " << cell->Percentile(0.95) << "\n";
     std::cout << "P99: " << cell->Percentile(0.99) << "\n";
+    /*std::cout << "Wall: " << cell->Wall_Latency() << "\n";*/
+
 
     driver.Close();
 
@@ -139,7 +135,7 @@ int main()
         wall_end - wall_start
     ).count();
 
-    std::sort(latencies_ns.begin(), latencies_ns.end());
+    /*std::sort(latencies_ns.begin(), latencies_ns.end());
 
     auto p50 = latencies_ns[QUERY_COUNT * 50 / 100];
     auto p95 = latencies_ns[QUERY_COUNT * 95 / 100];
@@ -147,15 +143,15 @@ int main()
 
     auto ns_to_ms = [](uint64_t ns) {
         return double(ns) / 1e6;
-    };
+    };*/
 
     std::cout << "Queries:   " << QUERY_COUNT << "\n";
     std::cout << "Records:   " << records.load() << "\n";
     std::cout << "Wall(ms):  " << total_ms << "\n";
     std::cout << "QPS:       " << (QUERY_COUNT * 1000.0 / total_ms) << "\n\n";
 
-    std::cout << "Latency percentiles (ms)\n";
+    /*std::cout << "Latency percentiles (ms)\n";
     std::cout << "P50: " << ns_to_ms(p50) << "\n";
     std::cout << "P95: " << ns_to_ms(p95) << "\n";
-    std::cout << "P99: " << ns_to_ms(p99) << "\n";
+    std::cout << "P99: " << ns_to_ms(p99) << "\n";*/
 }

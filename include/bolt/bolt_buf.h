@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.0
  * @date created 15th of April 2025, Tuesday.
- * @date updated 20th of Feburary 2026, Friday.
+ * @date updated 4th of March 2026, Wednesday.
  */
 #pragma once
 
@@ -59,18 +59,27 @@ static constexpr size_t TAIL_SIZE = 1024;           // an emergency tail region
 //          CLASS
 //===============================================================================|
 /**
- * @brief a little utility structure that aids BoltBuf in keeping some stats so
- *  as to decide if there is a need to grow/shrink based on recent traffic.
+ * @brief a buffer stat utility structure that allows BoltBuf to become adaptive
+ *  to receive traffic trends. It uses discrete-time leaky integrator or  
+ *  exponential moving average (EMA), y[n]=αy[n−1]+(1−α)⋅prev_ema
+ *  to track changes in network traffic and adapt to trends. Its biased towards 
+ *  growth and less of shrink to avoid trashing buffer. This allows for adaptive
+ *  buffer that relies on network traffic to mainitain its own optimum size.
  */
 struct BufferStats
 {
     size_t last_bytes_recvd = 0;
     double ema_recv = 0.0f;
 
-    static constexpr double alpha = 0.2;    // EMA smoothing factor
-    static constexpr double grow_threshold = 0.8;
-    static constexpr double shrink_theshold = 0.8;
+    static constexpr double alpha = 0.2;            // EMA smoothing factor
+    static constexpr double grow_threshold = 0.85;  // aggressive growth
+    static constexpr double shrink_theshold = 0.30; // conservative growth
 
+    static constexpr int grow_hits_required = 3;   
+    static constexpr int shrink_hits_required = 32;
+
+    int grow_hits = 0;
+    int shrink_hits = 0;
     
     /**
      * @brief computes the next Exponential Moving Average with pre-kooked constant
@@ -84,34 +93,89 @@ struct BufferStats
 
     
     /**
-	 * @brief determines if buffer should grow based on recent traffic
+     * @brief decideds to grow based on the calculated ema_recv value. When ema_recv
+     *  value exceeds the growth threshold and growth hit count exceeds the required
+     *  the buffer can be grow. This allows for growth based on recv trend and not 
+     *  just random spikes.
+     *
+     * @param capacity the buffer storage size
+     *
+     * @return true if buffer can grow alas false if not
      */
-    bool Should_Grow(const size_t capacity) const
+    bool Evaluate_Grow(const size_t capacity)
     {
-        return ema_recv > capacity * grow_threshold;
-    } // end Should_Grow
 
-    
+#ifdef _DEBUG
+        std::cout << "Evaluating buffer growth: " <<
+            "EMA: " << ema_recv << ", capacity: " <<
+            capacity << ", growth threshold: " <<
+            grow_threshold << ", cap * grow_threshold: " << 
+            capacity * grow_threshold << std::endl;
+#endif
+
+        if (ema_recv > capacity * grow_threshold)
+        {
+            ++grow_hits;
+            shrink_hits = 0;
+            if (grow_hits >= grow_hits_required)
+            {
+                grow_hits = 0;
+                return true;
+            } // end if grow
+            else grow_hits = 0;
+        } // end if ema_recv grow
+
+        return false;
+    } // end Evaluate_Grow
+
+
     /**
-     * @brief determines if buffer should shrink based on recent traffic
-	 */
-    bool Should_Shrink(const size_t capacity) const 
+     * @brief decides to shrink based on current ema_recv value and shrink count. 
+     *  Should both exceed their thresholds then buffer shrinks to a lower size.
+     * 
+     * @param capacity the buffer storage size
+     * 
+     * @return true if allowed to shrink alas false.
+     */
+    bool Evaluate_Shrink(const size_t capacity)
     {
-        return ema_recv < capacity * shrink_theshold;
-    } // end Should_Shrink
+
+#ifdef _DEBUG
+        std::cout << "Evaluating buffer shrink: " <<
+            "EMA: " << ema_recv << ", capacity: " <<
+            capacity << ", shrink threshold: " <<
+            shrink_theshold << ", cap * shrink_threshold: " <<
+            capacity * shrink_theshold << std::endl;
+#endif
+
+        if (ema_recv < capacity * shrink_theshold)
+        {
+            ++shrink_hits;
+            grow_hits = 0;
+            if (shrink_hits >= shrink_hits_required)
+            {
+                shrink_hits = 0;
+                return true;
+            } // end if shrinking fo real
+            else shrink_hits = 0;
+        } // end if shrinking
+
+        return false;
+    } // end Evaluate_Shrink
 };
 
 
 //===============================================================================|
 /**
- * @brief defines an optimized buffer aligned to take advantage of hardware
- *  cache alignment for maximum speed and output.
+ * @brief defines a recv buffer structure for bolt PackStream with growing and/or
+ *  shrinking capacity optimized for hardware viz cache alignmened storage and 
+ *  prefetch hints.
  */
 class alignas(CACHE_LINE_SIZE) BoltBuf
 {
 public:
 
-    BoltBuf(const size_t _capacity = 65'536 * 4)
+    BoltBuf(const size_t _capacity = 8192)
         : capacity{Align_Capacity(_capacity)},
           raw_ptr{Allocate_Aligned(capacity)},
           data{raw_ptr.get()},
@@ -125,7 +189,6 @@ public:
     BoltBuf& operator=(BoltBuf&&) noexcept = default;
 
     
-    //===============================================================================|
     /**
      * @brief return's the head of the write ptr
      */
@@ -267,51 +330,64 @@ public:
 
     
     /**
-	 * @brief allows growing the buffer based on recent traffic stats or requested 
-	 *  size
+	 * @brief doubles the buffer size if possible by allocating cache 
+     *  aligned region of memory. Once allocated copies the old data
+     *  back and arranges read/write offsets in accordance.
      * 
-     * @param n sizeof the chunk requested
-     * 
-	 * @return 0 on success/ignored -1 on failure
+	 * @return 0 on success and -1 on failure
      */
-    inline int Grow(const size_t n)
+    inline int Grow()
     {
-        if (!stat.Should_Grow(capacity) && (write_offset + n <= capacity - TAIL_SIZE))
-            return 0;   // no need of growth 
-        
         size_t new_capacity = capacity << 1;
-        while (write_offset + n > new_capacity - TAIL_SIZE)
-            new_capacity <<= 1;
 
         auto new_raw_ptr = Allocate_Aligned(new_capacity);
         if (!new_raw_ptr)
 			return -1;      // failed to allocate
 
         u8* new_data = new_raw_ptr.get();
-        iCpy(new_data, data, write_offset);
+        size_t used = write_offset - read_offset;
+
+#ifdef _DEBUG
+        std::cout << "Buffer grow: " << capacity <<
+            " --> " << new_capacity << std::endl;
+#endif
+
+        //if (used > 0)
+            iCpy(new_data, data, capacity);
 
         raw_ptr = std::move(new_raw_ptr);
         data = new_data;
         capacity = new_capacity;
 
+        /*write_offset = used;
+        read_offset = 0;*/
 		return 0;  // success
     } // end Grow
 
     
     /**
-     * @brief shrinks the buffer based on recent traffic stats
+     * @brief shrinks the buffer to twice the used capacity or clamps it at
+     *  a defined MIN_CAPACITY which is 65k in this imp, 16-bit is max message size.
+     *  Afterwards it adjustes the offsets to the newly sized buffer on success.
+     * 
+     * @return 0 on success and -1 on fail.
 	 */
-    inline void Shrink()
+    inline int Shrink()
     {
-        if (!stat.Should_Shrink(capacity))
-            return;
+        if (capacity == MIN_CAPACITY)
+            return 0;
 
         size_t used = write_offset - read_offset;
         size_t target_capacity = Align_Capacity(std::max(used << 1, MIN_CAPACITY));
 
         auto new_raw_ptr = Allocate_Aligned(target_capacity);
         if (!new_raw_ptr)
-            return;
+            return -1;
+
+#ifdef _DEBUG
+        std::cout << "Buffer shrink: " << capacity <<
+            " --> " << std::max(used << 1, MIN_CAPACITY) << std::endl;
+#endif
 
         u8* new_data = new_raw_ptr.get();
         if (used > 0)
@@ -323,6 +399,7 @@ public:
 
         write_offset = used;
         read_offset = 0;
+        return 0;
     } // end Shrink
 
     
@@ -377,6 +454,41 @@ public:
         return read_offset;
 	} // end Get_Read_Offset
 
+    
+    /**
+     * @brief updates the ema_recv value for buffer stats on every call, and
+     *  decides if buffer should grow, shrink or neither based on recv cycle trends.
+     */
+    inline void Adaptive_Tick(size_t bytes_this_cycle)
+    {
+        stat.Update(bytes_this_cycle);
+        if (stat.Evaluate_Grow(capacity)) Grow();
+        else if (stat.Evaluate_Shrink(capacity)) Shrink();
+    } // end Adaptive_Tick
+
+
+    /**
+     * @brief compacts the buffer towards the start to shove up space for
+     *  recv. The function copies whats left towards the start and resets
+     *  the read offset and and adjusts the write to the end of whats left.
+     */
+    inline bool Compact()
+    {
+        if (read_offset == 0) return false;     // compacted already
+
+        if (write_offset > read_offset)
+        {
+            size_t whats_left = write_offset - read_offset;
+            iCpy(Data(), Read_Ptr(), whats_left);
+
+            read_offset = 0;
+            write_offset = whats_left;
+        } // end if saftey net
+
+        return true;
+    } // end Compact
+
+
 private:
 
     size_t capacity;
@@ -387,7 +499,7 @@ private:
     BufferStats stat;
 
 
-    //===============================================================================|
+    
     /**
      * @brief tries to grow the buffer capacity
 	 */

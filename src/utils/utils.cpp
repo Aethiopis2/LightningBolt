@@ -3,7 +3,7 @@
  * 
  * @version 1.4
  * @date created 3rd of March, Sunday
- * @date updated 18th of January 2026, Sunday
+ * @date updated 2nd of March 2026, Sunday
  */
 
 
@@ -154,7 +154,7 @@ void Utils::Dump_Hex(const char* buf, size_t len)
         std::cout << "\n";
     }
 
-    std::cout << std::endl;
+    std::cout << std::dec <<  std::endl;
 } // end Dump_Hex
 
 

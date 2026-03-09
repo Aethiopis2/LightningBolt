@@ -3,7 +3,7 @@
  * 
  * @version 1.0
  * @date created 16th of April 2025, Sunday.
- * @date updated 18th of Feburary 2026, Wednesday.
+ * @date updated 28th of Feburary 2026, Saturday.
  */
 #pragma once
 
@@ -495,6 +495,15 @@ struct BoltValue
         return *this;
     } // end operator=
     
+
+    //template <typename T>
+    //friend std::ostream& operator<<(std::ostream& os, const BoltValue& bv) 
+    //{
+    //    os << bv.Get<T>();
+    //    return os;
+    //} // end ostream
+
+
     /**
      * @brief overloaded brace - () operator for list and struct types
      * 

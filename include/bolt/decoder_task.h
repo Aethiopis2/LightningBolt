@@ -26,16 +26,21 @@
 //          ENUM & TYPES
 //===============================================================================|
 /**
- * LightningBolt states over bolt
+ * In LightningBolt tasks have states that are used to track the progress of 
+ *  pipelined queries. The states are used to determine what the driver is expecting
+ *  from the peer and are used to define the action to take when a message is decoded. 
+ *  For example, when the state is Run, the driver is expecting a run success/fail/ 
+ *  ignored message and will decode accordingly.
  */
-enum class QueryState : u8 {
-    Connection,     // special 1: used during HELLO 
-    Logon,          // special 2: used in v5.x+ after HELLO
-    Logoff,         // special 3: expecting logoff success/fail message
+enum class TaskState : u8 {
+    None,           // special 1: no task, can pop out easy almost same as done
+	Hello,          // special 2: used to send HELLO message for v4.x and HELLO+LOGON for v5.x+
+    Logon,          // special 3: used in v5.x+ after HELLO
+    Logoff,         // special 4: expecting logoff success/fail message
 
-    Run,            // driver is expecting run success/fail message
+    Run,            // driver is expecting run success/fail/ignored message
     Pull,           // driver is expecting pull success/fail message
-    Streaming,      // driver is in a streaming state; i.e. reading buffer
+    Record,         // driver is in a streaming state; i.e. reading buffer
     Discard,        // driver is expecting discard success/fail message
     Begin,          // driver is expecting begin trx success/fail message
     Commit,         // driver is expecting commit trx success/fail message
@@ -44,9 +49,24 @@ enum class QueryState : u8 {
     Reset,          // driver is expecting reset success/fail message
     Telemetry,      // driver is expecting telemetry success/fail message
     Ack_Failure,    // driver is expecting ack_failure success/fail message
-    Error,          // driver has encountered errors  
 };
-constexpr int QUERY_STATES = 15;
+constexpr int QUERY_STATES = 16;
+
+
+/**
+ * @brief command types for my cellular model
+ */
+enum class CellCmdType
+{
+    Run,
+    Begin,
+    Commit,
+    Rollback,
+    Pull,
+    Discard,
+    Reset,
+    Logoff,
+};
 
 
 /**
@@ -69,19 +89,16 @@ struct BoltView
  */
 struct DecoderTask
 {
-    QueryState state;       // current state of the query
+    TaskState state;        // current state of the query
     BoltView view;          // view into the buffer for this query
-    BoltResult result;      // results of bolt values
-	int prev_bytes{ 0 };    // bytes left over from the previous batch, used for streaming queries
-	bool is_done{ false };  // indicates if the task is done processing, used for streaming queries 
 
     std::chrono::_V2::system_clock::time_point start_clock = 
         std::chrono::high_resolution_clock::now();  // starting point for timer, always now!
     std::function<void(BoltResult&)> cb = nullptr;  // a callback for async procs ideal for web apps.
 
     DecoderTask() = default;
-    DecoderTask(QueryState s) : state(s) { }
-	DecoderTask(QueryState s, std::function<void(BoltResult&)> c) : state(s), cb(c) {}
+    DecoderTask(TaskState s) : state(s) { }
+	DecoderTask(TaskState s, std::function<void(BoltResult&)> c) : state(s), cb(c) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

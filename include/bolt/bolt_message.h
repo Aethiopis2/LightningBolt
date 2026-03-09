@@ -1,14 +1,11 @@
 /**
- * @file bolt_message.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
  * @brief Defintion of BoltMessage
  * 
  * @version 1.0
- * @date 13th of April 2025, Sunday.
- * 
- * @copyright Copyright (c) 2025
- * 
+ * @date created 13th of April 2025, Sunday.
+ * @date update 27th of Feburary 2026, Friday.
  */
 #pragma once
 
@@ -43,9 +40,4 @@ struct BoltMessage
     {
         return msg.ToString();
     } // end ToString
-
-    bool Success() const { return msg.type == BoltType::Struct && msg.struct_val.tag == BOLT_SUCCESS; }
-    bool Failure() const { return msg.struct_val.tag == BOLT_FAILURE; }
-    bool Record() const { return msg.struct_val.tag == BOLT_RECORD; }
-    bool Ignored() const { return msg.struct_val.tag == BOLT_IGNORED; }
 };

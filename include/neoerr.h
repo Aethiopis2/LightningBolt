@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 13th of April 2025, Sunday.
- * @date updated 13th of Feburary 2026, Friday.
+ * @date updated 27th of Feburary 2026, Friday.
  */
 #ifndef __NEO_ERROR_H
 #define __NEO_ERROR_H
@@ -52,6 +52,23 @@ enum class LBDomain : u8
 };
 
 
+// where in the driver lifecycle did the error occur?
+enum class LBStage : u8
+{
+	LB_STAGE_NONE,		// nothing is going on
+	LB_STAGE_CONNECT,
+	LB_STAGE_HANDSHAKE,
+	LB_STAGE_HELLO,
+	LB_STAGE_AUTH,
+	LB_STAGE_SESSION,
+	LB_STAGE_QUERY,
+	LB_STAGE_DECODE,
+	LB_STAGE_DECODEING_TASK,
+	LB_STAGE_ROUTE,
+	LB_STAGE_TEARDOWN,
+};
+
+
 // extra error codes specific to their domains
 enum class LBCode : u8
 {
@@ -59,9 +76,14 @@ enum class LBCode : u8
 	LB_CODE_VERSION,	// version negotiation didn't go so well
 	LB_CODE_PROTO,		// decoding error, unexpected protocol
 	LB_CODE_ENCODER,	// encoding error can't go further
+	LB_CODE_TASKSTATE,	// an invalid task state for the call
 
 	LB_CODE_NEO4J_CONNECT,	// server error's during neo4j connection; TCP Connect + HELLO + LOGON
 	LB_CODE_NEO4J_QUERY,	// query request
+
+	LB_CODE_STATE_QUEUE_MEM,	// out of queue memory
+	LB_CODE_STATE_QUEUE_SIZE,	// invalid queue size 
+	LB_CODE_STATE_MEM,			// memory growth issue or compact
 };
 
 
@@ -79,30 +101,22 @@ using LBStatus = u64;
  * 
  * @param action to undertake - 8-bit value
  * @param domain or ownership - 8-bit value
+ * @param stage or lifecycle stage - 8-bit value
  * @param code specific code - 8-bit value
  * @param aux or extra or system related identifer - 32-bits
  */
-constexpr LBStatus LB_Make(
-	LBAction action = LBAction(0),
-	LBDomain domain = LBDomain(0),
-	LBCode code = LBCode(0),
-	u32 aux = 0)
+constexpr LBStatus LB_Make
+(
+	LBAction action = LBAction::LB_OK,
+	LBDomain domain = LBDomain::LB_DOM_NONE,
+	LBStage stage = LBStage::LB_STAGE_NONE,
+	LBCode code = LBCode::LB_CODE_NONE,
+	u32 aux = 0
+)
 {
-	return ((u64(action) << 48) | (u64(domain) << 40) | 
+	return ((u64(action) << 56) | (u64(domain) << 48) | (u64(stage) << 40) |
 		(u64(code) << 32) | (u64(aux)));
-} // end LBStatus
-
-
-/**
- * @brief returns an LB_OK with embded extra info
- *
- * @param aux the code to embed into lower 32-bits of quad
- */
-constexpr LBStatus LB_OK_INFO(u32 aux)
-{
-	return LB_Make(LBAction::LB_OK, LBDomain::LB_DOM_NONE, 
-		LBCode::LB_CODE_NONE, aux);
-} // end LB_OK_INFO
+} // end LB_Make
 
 
 /**
@@ -110,8 +124,8 @@ constexpr LBStatus LB_OK_INFO(u32 aux)
  */
 constexpr u8 LB_Action(LBStatus s) 
 {
-	return u8((s >> 48) & 0xFF);
-} // end LBAction
+	return u8((s >> 56) & 0xFF);
+} // end LB_Action
 
 
 /**
@@ -119,8 +133,17 @@ constexpr u8 LB_Action(LBStatus s)
  */
 constexpr u8 LB_Domain(LBStatus s) 
 {
+	return u8((s >> 48) & 0xFF);
+} // LB_Domain
+
+
+/**
+ * @brief returns the domain or owner of the status
+ */
+constexpr u8 LB_Stage(LBStatus s)
+{
 	return u8((s >> 40) & 0xFF);
-} // LBDomain
+} // LB_Stage
 
 
 /**
@@ -129,8 +152,7 @@ constexpr u8 LB_Domain(LBStatus s)
 constexpr u8 LB_Code(LBStatus s)
 {
 	return u8((s >> 32) & 0xFF);
-} // end LBAux
-
+} // end LB_Code
 
 
 /**
@@ -139,7 +161,7 @@ constexpr u8 LB_Code(LBStatus s)
 constexpr u32 LB_Aux(LBStatus s)
 {
 	return u32(s & 0xFFFFFFFF);
-} // end LBAux
+} // end LB_Aux
 
 
 /**
@@ -148,8 +170,31 @@ constexpr u32 LB_Aux(LBStatus s)
 constexpr bool LB_OK(LBStatus s) 
 {
 	return (LB_Action(s) == 0 && LB_Domain(s) == 0);
-} // end LBOK
+} // end LB_OK
 
+
+/**
+ * @brief returns an LB_OK with embded extra info
+ *
+ * @param aux the code to embed into lower 32-bits of quad
+ */
+constexpr LBStatus LBOK_INFO(u32 aux)
+{
+	return LB_Make(LBAction::LB_OK, LBDomain::LB_DOM_NONE,
+		LBStage::LB_STAGE_NONE, LBCode::LB_CODE_NONE, aux);
+} // end LB_OK_INFO
+
+
+/**
+ * @brief adds a stage to the status, useful for debugging and tracing
+ *
+ * @param s the status to add the stage to
+ * @param stage the stage to add to the status
+ */
+constexpr LBStatus LB_Add_Stage(LBStatus s, LBStage stage)
+{
+	return s | (u64(stage) << 40);
+} // end LB_Add_Stage
 
 
 LBStatus LB_Handle_Status(LBStatus status, NeoCell* pcell);

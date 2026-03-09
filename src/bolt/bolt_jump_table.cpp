@@ -204,7 +204,7 @@ static inline bool Decode_String(u8*& pos, BoltValue& out)
     iCpy(&len, ++pos, sizeof(T));
     if constexpr (sizeof(T) > 1)
     {
-        if constexpr (is_big_endian)
+        if constexpr (!is_big_endian)
             len = byte_swap(len);
     } // end if
 

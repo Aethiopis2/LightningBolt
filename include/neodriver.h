@@ -2,8 +2,8 @@
   @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.0
- * @date created 17th of January 2026, Saturday
- * @date updated 10th of Feburary 2026, Tuesday
+ * @date created 17th of January 2026, Saturday.
+ * @date updated 4th of March 2026, Wednesday.
  */
 #pragma once
 
@@ -18,7 +18,8 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
-constexpr int MAX_EVENTS = 1024;
+constexpr static int MAX_EVENTS = 1024;
+constexpr static int POOL_SIZE = 1;
 
 
 enum class DbMode
@@ -44,12 +45,13 @@ public:
 
     NeoDriver(const std::string& urls, BoltValue auth,
         BoltValue extra = BoltValue::Make_Map(),
-        const int pool_size_ = 0);
+        const int pool_size_ = POOL_SIZE);
     ~NeoDriver();
 
-    int Execute(std::string& query, std::map<std::string, std::string> params = {});
-    int Execute_Async(std::string query, std::function<void(BoltResult&)> cb,
-        std::map<std::string, std::string> params = {});
+    LBStatus Execute_Async(std::function<void(BoltResult&)> cb, const char* query,
+        BoltValue&& params = BoltValue::Make_Map(), BoltValue&& extra = BoltValue::Make_Map());
+    LBStatus Execute(const char* query, BoltValue&& params = BoltValue::Make_Map(),
+        BoltValue&& extra = BoltValue::Make_Map());
     int Fetch(BoltResult& result);
 
     void Close();
@@ -62,13 +64,14 @@ public:
 
 private:
 
-    std::string urls;       // raw unfiltered url string for database connection
-    BoltValue auth;         // authentication token
-    BoltValue extras;       // any extra connection params (power user mode, not me).
+    std::string _urls;       // raw unfiltered url string for database connection
+    BoltValue _auth;         // authentication token
+    BoltValue _extras;       // any extra connection params (power user mode, not me).
 
     int pool_size;
     int epfd;                   // event file descriptor for polling
     int exit_fd;                // used for exits in epoll
+    u64 next_client_id;         // id for the next connection in the pool
     LBStatus last_rc;           // store's the last return value which maybe an error
     epoll_event events[MAX_EVENTS];   // epoll events array
 
@@ -76,10 +79,9 @@ private:
     std::thread poll_thread;    // polls ready connections
     std::atomic<bool> looping;
 
-    NeoCellPool pool;           // instance of pool
+    NeoCellPool* pool;          // pointer to an instance of pool
 
     void Poll_Read();
-    LBStatus Start_Session(NeoCell* pcell);
 
     struct RouteTable
     {

@@ -29,15 +29,16 @@
  */
 struct BoltResult
 {
-    BoltDecoder* pdec;          // pointer to the decoder for the result
-    BoltMessage fields;         // the field names for the record
-    BoltMessage summary;        // the summary message at end of records
-    BoltMessage err{ BoltValue::Make_Unknown() };   // holds error strings 
+    BoltDecoder* pdec;     // pointer to the decoder for the result
+    BoltMessage fields;    // the field names for the record
+    BoltMessage summary;   // the summary message at end of records
 
     size_t message_count{ 0 };  // count of messages contained within records
-	size_t total_bytes{ 0 };     // total bytes consumed by the records
+	size_t total_bytes{ 0 };    // total bytes consumed by the records
     size_t start_offset{ 0 };   // start of message offset in the pool
-    int client_id = 0;
+    bool error{ false };        // determines if this stream is a failed one
+    bool done{ false };         // when true, streaming is done and summary is ready.
+    int client_id = 0;          // debugging purposes, to id threads.
 
     struct iterator
     {
@@ -76,6 +77,9 @@ struct BoltResult
         pdec = other.pdec;
         fields = other.fields;
         summary = other.summary;
+        error = other.error;
+        done = other.done;
+        client_id = other.client_id;
         message_count = other.message_count;
 		total_bytes = other.total_bytes;
         start_offset = other.start_offset;
@@ -86,6 +90,4 @@ struct BoltResult
 
     iterator begin() { return iterator(pdec, start_offset); }
     iterator end() { return iterator(pdec, start_offset + total_bytes); }
-
-    bool Is_Error() const { return err.msg.type != BoltType::Unk; }
 };

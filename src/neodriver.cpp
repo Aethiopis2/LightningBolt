@@ -2,10 +2,9 @@
   @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.0
- * @date created 17th of January 2026, Saturday
- * @date updated 10th of Feburary 2026, Tuesday
+ * @date created 17th of January 2026, Saturday.
+ * @date @date updated 4th of March 2026, Wednesday.
  */
-#pragma once
 
 
  //===============================================================================|
@@ -19,20 +18,22 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
-const int POOL_SIZE = 1;
 
 
 
 //===============================================================================|
 //          DEFINITON
 //===============================================================================|
+/**
+ * @brief constructor
+ */
 NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
 	const int pool_size_)
-	: urls(urls), auth(auth), 
-	pool(pool_size_ == 0 ? POOL_SIZE : pool_size_, this->urls, &this->auth, &this->extras),
-	pool_size(pool_size_ == 0 ? POOL_SIZE : pool_size_)
+	: _urls(urls), _auth(std::move(auth)), pool(nullptr),
+	pool_size(pool_size_ <= 0 ? POOL_SIZE : pool_size_)
 {
-	this->extras = BoltValue::Make_Map();
+	next_client_id = 0;
+	_extras = BoltValue::Make_Map();
 
 	// make sure every key in the extra map is in lowercase letters
 	size_t items = extras.map_val.key_offset + extras.map_val.size;
@@ -40,21 +41,15 @@ NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
 	{
 		BoltValue* bv = GetBoltPool<BoltValue>()->Get(v);
 		std::string key = Utils::String_ToLower(GetBoltPool<BoltValue>()->Get(k)->ToString());
-		this->extras.Insert_Map(key, *bv);
+		_extras.Insert_Map(key, *bv);
 	} // end for copy
 
 	// create epoll instance for polling
 	epfd = epoll_create1(0);	// no flags, no checks
-	exit_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-
-	struct epoll_event ev {};
-	ev.events = EPOLLIN;
-	ev.data.fd = exit_fd;
-
-	epoll_ctl(epfd, EPOLL_CTL_ADD, exit_fd, &ev);
+	pool = new NeoCellPool(epfd, pool_size, _urls, &_auth, &_extras);
 
 	// start the polling thread
-	looping.store(true, std::memory_order_acquire);
+	looping.store(true, std::memory_order_release);
 	poll_thread = std::thread(&NeoDriver::Poll_Read, this);
 } // end constructor
 
@@ -64,68 +59,82 @@ NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
  */
 NeoDriver::~NeoDriver() 
 {
-	static size_t last_offset = auth.pool->Get_Last_Offset() > extras.pool->Get_Last_Offset() ?
-		auth.pool->Get_Last_Offset() : extras.pool->Get_Last_Offset();
+	// release all memory allocated for auth and extras
+	static size_t last_offset = 
+		_auth.pool->Get_Last_Offset() > _extras.pool->Get_Last_Offset() ?
+		_auth.pool->Get_Last_Offset() : _extras.pool->Get_Last_Offset();
 	Release_Pool<BoltValue>(last_offset);
 	Close();
+
+	// kill pool pointer
+	delete pool;
+	pool = nullptr;
 } // end destructor
 
 
-int NeoDriver::Execute(std::string& query, std::map<std::string, std::string> params)
+/**
+ * @brief executes async query using the next connection from the pool. If the connection is already
+ *	connected it skips session start and executes the query. The function also passes the callback
+ *	address to the cells Run_Async function.
+ * 
+ * @param cb the callback function to invoke per every stream ready
+ * @param query the query to execute.
+ * @param params parameters for cypher query above
+ * @param extra info for cypher like r/w, db name, bookmarks etc.
+ * 
+ * @return LB_OK on success, alas LB_FAIL.
+ */
+LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb, const char* query, 
+	BoltValue&& params, BoltValue&& extra)
 {
 	// get the next instance from the pool, and execute on that
-	NeoCell* cell = pool.Acquire();
-	if (!cell)
-		return -3;  // error acquiring cell
+	NeoCell* pcell = pool->Acquire();
+	if (!pcell) return LB_Make(
+		LBAction::LB_FAIL,
+		LBDomain::LB_DOM_STATE,
+		LBStage::LB_STAGE_QUERY
+	);
 
 	// make sure its connected first, if not connect
-	LBStatus rc = Start_Session(cell);
-	if (!LB_OK(rc))
-		return -1;
-
-	CellCommand cmd;
-	cmd.type = CellCmdType::Run;
-	cmd.cypher = query;
-	cmd.params = BoltValue::Make_Map();
-	cmd.extras = BoltValue::Make_Map();
+	LBStatus rc = pcell->Start_Session(++next_client_id);
+	if (!LB_OK(rc)) return rc;
 
 	// just pass to pool
-	return cell->Enqueue_Request(std::move(cmd));
-} // end Execute
-
-
-int NeoDriver::Execute_Async(std::string query, std::function<void(BoltResult&)> cb,
-	std::map<std::string, std::string> params)
-{
-	// get the next instance from the pool, and execute on that
-	NeoCell* cell = pool.Acquire();
-	if (!cell)
-		return -3;  // error acquiring cell
-
-	// make sure its connected first, if not connect
-	LBStatus rc = Start_Session(cell);
-	if (!LB_OK(rc))
-		return -1;
-
-	// now form query parameters and pass to cell
-	CellCommand cmd;
-	cmd.type = CellCmdType::Run;
-	cmd.cypher = query;
-	cmd.params = BoltValue::Make_Map();
-	cmd.extras = BoltValue::Make_Map();
-	cmd.cb = cb;
-
-	// just pass to pool
-	return cell->Enqueue_Request(std::move(cmd));
+	return pcell->Run_Async(cb, query, std::move(params), std::move(extra));
 } // end Execute_Async
- 
+
+
+/**
+ * @brief this is the sync version of Execute_Async. It basically invokes Execute_Async
+ *	with the first parameter or callback set to null; therefore caller can manually fetch
+ *	later on via, Fetch().
+ * 
+ * @param query the query to execute.
+ * @param params parameters for cypher query above
+ * @param extra info for cypher like r/w, db name, bookmarks etc.
+ * 
+ * @return LB_OK on success, alas LB_FAIL.
+ */
+LBStatus NeoDriver::Execute(const char* query, BoltValue&& params,
+	BoltValue&& extra)
+{
+	// invoke the async method with no callbacks
+	return Execute_Async(nullptr, query, std::move(params), std::move(extra));
+} // end Execute
 
 
 void NeoDriver::Close()
 {
 	u64 my_exit = 1;
+	exit_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 
-	pool.Stop();
+	struct epoll_event ev {};
+	ev.events = EPOLLIN;
+	ev.data.fd = exit_fd;
+
+	epoll_ctl(epfd, EPOLL_CTL_ADD, exit_fd, &ev);
+
+	pool->Stop();
 	write(exit_fd, &my_exit, sizeof(my_exit));
 	if (poll_thread.joinable()) poll_thread.join();
 
@@ -151,15 +160,15 @@ std::string NeoDriver::Get_Last_Error() const
 	LBDomain domain = LBDomain(LB_Domain(last_rc));
 	if (domain == LBDomain::LB_DOM_SYS || domain == LBDomain::LB_DOM_SSL)
 		return LB_Error_String(last_rc);
-	else if (domain == LBDomain::LB_DOM_NEO4J)
-		return last_err;
+
+	return last_err;
 } // end Get_Last_Error
 
 
 NeoCell* NeoDriver::Get_Session()
 {
-	NeoCell* pcell = pool.Acquire();
-	last_rc = Start_Session(pcell);
+	NeoCell* pcell = pool->Acquire();
+	last_rc = pcell->Start_Session(++next_client_id);
 
 	if (!LB_OK(last_rc))
 	{
@@ -173,13 +182,13 @@ NeoCell* NeoDriver::Get_Session()
 
 NeoCellPool* NeoDriver::Get_Pool()
 {
-	for (int i = 0; i < pool.Workers().size(); i++)
+	for (int i = 0; i < pool->Workers().size(); i++)
 	{
-		auto* p = pool.Acquire();
-		Start_Session(p);
+		auto* p = pool->Acquire();
+		p->Start_Session(next_client_id++);
 	}
 		
-	return &pool;
+	return pool;
 } // end Get_Pool
 
 
@@ -190,7 +199,7 @@ void NeoDriver::Poll_Read()
 		int nfds = epoll_wait(epfd, events, MAX_EVENTS, 1000); // 1 second timeout
 		for (int n = 0; n < nfds; ++n)
 		{
-			NeoCell* cell = static_cast<NeoCell*>(events[n].data.ptr);
+			NeoCell* pcell = static_cast<NeoCell*>(events[n].data.ptr);
 			if (events[n].events & EPOLLIN)
 			{
 				if (events[n].data.fd == exit_fd)
@@ -201,40 +210,43 @@ void NeoDriver::Poll_Read()
 					break;
 				}
 
-				cell->DWake();	// wake the decoder thread
+				// ready to read, read it in and push task to decoder
+				LBStatus rc = 0;
+				do
+				{
+					rc = pcell->Poll_Read();
+					if (!LB_OK(rc))
+					{
+						if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
+						{
+							break;
+						} // end if fail
+						else if (LBAction(LB_Action(rc)) == LBAction::LB_RETRY)
+						{
+							break;
+						} // end else
+						else break; // LB_WAIT or other non-fatal, non-retryable errors, just wait for next event
+					} // end if error
+
+
+					// now begin decoding, if we have a full message
+					rc = pcell->Decode_Response(pcell->Get_Read_Buffer_Read_Ptr(), LB_Aux(rc));
+					if (!LB_OK(rc))
+					{
+						if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
+						{
+							break;
+						} // end if fail
+						else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
+						{
+							pcell->Consume_Read_Buffer(LB_Aux(rc));
+							continue;	// keep polling if we have more to decode
+						} // end else
+					} // end if decode error
+
+					pcell->Consume_Read_Buffer(LB_Aux(rc));
+				} while (LB_OK(rc));
 			} // end if readable
 		} // end for nfds
 	} // end while looping
 } // end Poll_Read
-
-
-/**
- * @brief starts a new connection with neo4j server or session. Once connected
- *	it registers the socket for epoll activity, so that our thread wakes up
- *	only when socket is ready.
- * 
- * @param pcell pointer to a cell/session object
- * 
- * @return LB_OK on success. On fail LB_RETRY or LB_FAIL depending on
- *	the stack that failed.
- */
-LBStatus NeoDriver::Start_Session(NeoCell* pcell)
-{
-	if (pcell->Is_Connected()) return LB_Make();
-
-	LBStatus rc = pcell->Start();
-	if (!LB_OK(rc)) 
-		return rc;
-
-	// register it to epoll for it to actively poll for events
-	epoll_event ev = {};
-	ev.events = EPOLLIN | EPOLLET;
-	ev.data.ptr = pcell;
-	if (epoll_ctl(epfd, EPOLL_CTL_ADD, pcell->Get_Socket(), &ev) < 0)
-	{
-		return LB_Make(LBAction::LB_RETRY, LBDomain::LB_DOM_SYS,
-			LBCode::LB_CODE_NONE, errno);
-	} // end if error adding to epoll
-
-	return rc;
-} // end Start_Session

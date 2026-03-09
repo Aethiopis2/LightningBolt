@@ -1,12 +1,9 @@
 /**
- * @brief implementation detials for NeoQE, the Query Engine
- *
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
+ * @version 1.0
  * @date created 10th of December 2025, Wednesday
- * @date updated 15th of Feburary 2026, Sunday
- *
- * @copyright Copyright (c) 2025
+ * @date @date updated 27th of Feburary 2026, Friday
  */
 
 
@@ -26,10 +23,11 @@
  *
  * @param con_string the connection string to connect to neo4j server
  */
-NeoCell::NeoCell(const std::string& urls, BoltValue* pauth, BoltValue* pextras)
-	: connection(urls, pauth, pextras), running(false),
-	  esleep(0), dsleep(0), try_count(0), max_tries(5)
+NeoCell::NeoCell(int epfd_, const std::string& urls, BoltValue* pauth, BoltValue* pextras)
+	: connection(urls, pauth, pextras), epfd(epfd_), max_retries(12)
 {
+	retry_count = 0;
+	leftover_bytes = 0;
 } // end NeoCell
 
 
@@ -43,91 +41,99 @@ NeoCell::~NeoCell()
 
 
 /**
- * @brief starts a TCP connection with Neo4j server either TLS enabled or not. It then begins
- *  version negotiation using v5.7+ manifest if supported or old skool 20 byte payload data
- *  if not. On Successful negotiation the function sends a HELLO message for < v5.0 and
- *  followed by LOGON message for v5.0+. During handshake, should peer closes the connection
- *  the function attempts reconnect a couple of more times before giving up.
+ * @brief starts a session with the peer by sending a HELLO message based on the version
+ *  negotiated. For v5.x it sends a HELLO followed by LOGON message, while for v4.x
+ *  it sends a single HELLO message. On successful authentication the peer responds with
+ *  SUCCESS message and we are good to go. On LB_Retry the function attempts reconnection
+ *	predefined number of times before giving up.
  *
- * @param id application defined connection identifer
- *
- * @return 0 on success. -1 on sys error, -2 app speific error s.a version not supported
+ * @return LB_OK on success. LB_FAIL on terminal fail.
  */
-LBStatus NeoCell::Start(const int id)
+LBStatus NeoCell::Start_Session(const int id)
 {
-	// clear previous errors & add new ones
-	tasks.Clear();
-	tasks.Enqueue({ QueryState::Connection });
+	LBStatus rc = Handshake(id);
+	if (!LB_OK(rc)) return LB_Handle_Status(rc, this);
 
-	LBStatus rc = connection.Init(id);
-	if (!LB_OK(rc))
-	{
-		//LB_Handle_Status(rc, this);
-		return rc;
-	} // end if
+	// push a state into the queue
+	TaskState state = TaskState::Hello;
+	if (!connection.tasks.Enqueue(state))
+		return LB_Make(
+			LBAction::LB_FAIL, 
+			LBDomain::LB_DOM_STATE,
+			LBStage::LB_STAGE_SESSION, 
+			LBCode::LB_CODE_STATE_QUEUE_MEM
+		);
 
-	EWake();
-	Set_Running(true);
-	encoder_thread = std::thread(&NeoCell::Encoder_Loop, this);
-	decoder_thread = std::thread(&NeoCell::Decoder_Loop, this);
+	if (connection.supported_version.Get_Version() >= 5.1)       // use version 6/5 hello
+		rc = connection.Send_Hellov5(state);
+	else  // version 4 and below 
+		rc = connection.Send_Hellov4(state);
 
-	// wait for result
+	if (!LB_OK(rc)) return LB_Handle_Status(rc, this);
 	connection.Wait_Task();
 
 	// check decoded value
-	auto t = rqueue.Dequeue();
+	auto t = connection.results.Dequeue();
 	if (t.has_value())
 	{
-		if (t->Is_Error())
+		if (t->error)
 		{
-			last_error = t->err.ToString();
-			return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_NEO4J);
+			err_desc = t->begin().bv.ToString();
+			rc = LB_Make(
+				LBAction::LB_FAIL,
+				LBDomain::LB_DOM_NEO4J,
+				LBStage::LB_STAGE_SESSION
+			);
 		} // end if failed
 	} // end if
 
-	return rc;	// should be ready
-} // end Start
+	return rc;
+} // end Start_Session
 
 
-int NeoCell::Enqueue_Request(CellCommand&& cmd)
+LBStatus NeoCell::Run_Async(std::function<void(BoltResult&)> cb, 
+	const char* query, BoltValue&& param, BoltValue&& extra)
 {
-	if (!equeue.Enqueue(std::move(cmd)))
-		return -3;
+	// queue the request as a command structure before running it;
+	//	that allows for retries incase of failures.
+	CellCommand cmd;
+	cmd.type = CellCmdType::Run;
+	cmd.cypher = query;
+	cmd.param = std::move(param);
+	cmd.extra = std::move(extra);
+	cmd.cb = cb;
 
-	EWake();	// also wakes decoder too
-	return 0;
-} // end Enqueue_Request
+	LBStatus rc = Execute_Command(cmd);
+	if (!LB_OK(rc))
+		rc = LB_Handle_Status(rc, this);
 
-
-//int NeoCell::Run(const char* cypher, BoltValue params, BoltValue extras, ResultCallback fn)
-//{
-//	results_function = fn;
-//	if (!request_queue.Enqueue({ cypher, std::move(params), std::move(extras) }))
-//	{
-//		results_function(-1, nullptr);
-//		return -3;
-//	} // end if not enqueued
-//
-//	Add_QCount();
-//	return 0;
-//} // Run
+	return LB_Make();
+} // end run
 
 
-int NeoCell::Fetch(BoltResult& results)
+LBStatus NeoCell::Run(const char* query, BoltValue&& param, BoltValue&& extra)
+{
+	return Run_Async(nullptr, query, std::move(param), std::move(extra));
+} // end run
+
+
+
+LBStatus NeoCell::Fetch(BoltResult& results)
 {
 	do
 	{
 		// wait for at least one full message
 		connection.Wait_Task();
 
-		auto result = rqueue.Dequeue();
+		requests.Dequeue();		// remove the request on response to user, its done!
+		auto result = connection.results.Dequeue();
 		if (!result.has_value())
-			return -1;
+			return LB_Make();
 
 		results = std::move(result.value());
-	} while (!rqueue.Is_Empty());
+	} while (!connection.results.Is_Empty());
 
-	return 0;
+	return LB_Make();
 } // end Fetch
 
 
@@ -143,19 +149,28 @@ int NeoCell::Get_Socket() const
 /**
  * @brief returns the number of connection attempts made so far
  */
-int NeoCell::Get_Try_Count() const
+int NeoCell::Get_Retry_Count() const
 {
-	return try_count;
+	return retry_count;
 } // end Get_Try_Count
 
 
 /**
  * @brief returns the maximum retry count allowed
  */
-int NeoCell::Get_Max_Try_Count() const
+int NeoCell::Get_Max_Retry_Count() const
 {
-	return max_tries;
+	return max_retries;
 } // end Get_Max_Try_Count
+
+
+/**
+ * @brief returns the optional client id set from driver
+ */
+int NeoCell::Get_ClientID() const
+{
+	return connection.client_id;
+} // end Get_Cli_ID
 
 
 /**
@@ -202,7 +217,7 @@ bool NeoCell::Is_Connected() const
  */
 std::string NeoCell::Get_Last_Error() const
 {
-	return last_error;
+	return err_desc;
 } // end Get_Last_Error
 
 
@@ -211,9 +226,9 @@ std::string NeoCell::Get_Last_Error() const
  */
 bool NeoCell::Can_Retry()
 {
-	if (++try_count > max_tries)
+	if (++retry_count > max_retries)
 	{
-		try_count = 0;		// reset it
+		retry_count = 0;		// reset it
 		return false;
 	} // end if not anymore
 
@@ -224,11 +239,20 @@ bool NeoCell::Can_Retry()
 /**
  * @brief sets the maximum retry count to the number, n greater than 0
  */
-void NeoCell::Set_Retry_Count(const int n)
+void NeoCell::Set_Max_Retry_Count(const int n)
 {
-	if (n > 0)
-		max_tries = n;
+	if (n > 0 && max_retries != n)
+		max_retries = n;
 } // end Set_Retry_Count
+
+
+/**
+ * @brief reset's the retry count to 0 to begin afresh.
+ */
+void NeoCell::Reset_Retry()
+{
+	retry_count = 0;
+} // end Reset_Retry
 
 
 /**
@@ -236,172 +260,26 @@ void NeoCell::Set_Retry_Count(const int n)
  */
 void NeoCell::Stop()
 {
+	DecoderTask task(TaskState::Logoff);
 	if (!connection.Is_Open())
 		return;
 
-	if (connection.supported_version.major >= 5)
-		Enqueue_Request({ CellCmdType::Logoff });
+	if (connection.supported_version.Get_Version() >= 5.1)
+	{
+		CellCommand cmd({ CellCmdType::Logoff });
+		Execute_Command(cmd);
+	} // end if ver 5.1
 
 	// drain all requrests before terminating
 	do {
 		connection.Wait_Task();
-		tasks.Dequeue();
-	} while (!tasks.Is_Empty());
+		connection.tasks.Dequeue();
+	} while (!connection.tasks.Is_Empty());
 
+	epoll_ctl(epfd, EPOLL_CTL_DEL, Get_Socket(), nullptr);
 	connection.Terminate();
-	Set_Running(false);
-
-	EWake();
-	if (encoder_thread.joinable())
-		encoder_thread.join();
-
-	DWake();
-	if (decoder_thread.joinable())
-		decoder_thread.join();
 } // end Stop
 
-
-/**
- * @brief the encoder loop encodes or calls the connection functions based on
- *	the command type info given by CellCommand structure. Once all the rquest_queue
- *	items are done, or flushed to peer, the thread is put to sleep until woken by
- *	Add_QCount() method or similar.
- */
-void NeoCell::Encoder_Loop()
-{
-	while (Is_Running())
-	{
-		if (!equeue.Is_Empty())
-		{
-			auto req = equeue.Front();
-			int write_ret = 0;
-			if (req.has_value())
-			{
-				switch (req->get().type)
-				{
-				case CellCmdType::Run:
-					tasks.Enqueue({ QueryState::Run, req->get().cb });
-					write_ret = connection.Run(req->get().cypher.c_str(), req->get().params,
-						req->get().extras, -1);
-					break;
-
-				case CellCmdType::Begin:
-					tasks.Enqueue({ QueryState::Begin });
-					write_ret = connection.Begin(req->get().params);
-					break;
-
-				case CellCmdType::Commit:
-					tasks.Enqueue({ QueryState::Commit });
-					write_ret = connection.Commit(req->get().params);
-					break;
-
-				case CellCmdType::Rollback:
-					tasks.Enqueue({ QueryState::Rollback });
-					write_ret = connection.Rollback(req->get().params);
-					break;
-
-				case CellCmdType::Logoff:
-					tasks.Enqueue({ QueryState::Logoff });
-					write_ret = connection.Logoff();
-					break;
-
-				default:
-					//connection.err_string = "Encoder loop, command violation. Aborted thread.";
-					write_ret = -2;		// critical violation
-				} // end switch
-
-				// test the return value
-				if (write_ret < 0) break;
-			} // end if has value
-
-			equeue.Dequeue();		// now remove it
-		} // end if not empty
-		else Sleep(esleep);	// wait it out till notified.
-
-	} // end while running
-} // end Write_Loop
-
-
-/**
- * @brief decoder thread sits and polls incomming requests, decodes them as they appear
- *	on the connection decoder tasks. When decoder tasks are empty are has no more to do,
- *	the thread sleeps/waits for state changes on the atomic boolean dsleep is true.
- */
-void NeoCell::Decoder_Loop()
-{
-	bool begin_decode = true;		// used to indicate if we need to poll more
-	LBStatus rc = LB_Make();	// 0k
-
-	while (Is_Running())
-	{
-		if (!tasks.Is_Empty())
-		{
-			rc = connection.Poll_Readable();
-			LBAction action = LBAction(LB_Action(rc));
-			LBDomain domain = LBDomain(LB_Domain(rc));
-
-			if (action == LBAction::LB_OK)
-			{
-				rc = Decode_Response(connection.read_buf.Read_Ptr(), LB_Aux(rc));
-				if (!LB_OK(rc))
-				{
-					if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
-					{
-						Set_Running(false);
-						EWake();
-						break;
-					} // end if fail
-					else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
-					{
-						connection.read_buf.Consume(LB_Aux(rc));
-						continue;	// keep polling if we have more to decode
-					} // end else
-				} // end if decode error
-
-				connection.read_buf.Consume(LB_Aux(rc));
-				if (tasks.Is_Empty())
-					connection.read_buf.Reset();		// reset buffer if no more tasks
-			} // end if begin decode
-			else if ((action == LBAction::LB_FAIL && (domain == LBDomain::LB_DOM_SYS ||
-				domain == LBDomain::LB_DOM_SSL)) ||
-				(action == LBAction::LB_RETRY && domain == LBDomain::LB_DOM_SYS))
-			{
-				Set_Running(false);
-				EWake();
-				break;
-			} // end if readable
-
-		} // end if
-		else Sleep(dsleep);	// wait it out till notified.
-	} // end while running
-
-	// on abnormal exit, handle it
-	//if (!LB_OK(rc)) LB_Handle_Status(rc, this);
-} // end Decoder_Loop
-
-
-/**
- * @brief wakes a sleeping thread if 'equeue' encoder queue size is exactly 1
- *	or the first element, i.e. simulates waking on first message arrival after
- *	idle periods.
- */
-void NeoCell::EWake()
-{
-	int c = esleep.fetch_add(1, std::memory_order_acq_rel);
-	if (c >= 1) esleep.notify_one();
-} // end EWake
-
-
-/**
- * @brief wakes a sleeping decoder thead if the connection internal memeber
- *	'tasks' for decoding has size of at least one item or the first item
- *	or 0 during exiting.
- */
-void NeoCell::DWake()
-{
-	int c = dsleep.fetch_add(1, std::memory_order_acq_rel);
-	if (c >= 1) dsleep.notify_one();
-} // end DWake
 
 
 /**
@@ -414,108 +292,194 @@ void NeoCell::Clear_Histo()
 
 
 /**
- * @brief causes the encoder thread to wait or simulate sleep as long as boolean atomic
- *	member/attribute 'esleep' is set to true. On change of state the sleeping thread
- *	needs to be notified through Toggle_ESleep() or Add_QCount(), which internally calls
- *	esleep.notify_one() during the first changes to the equeue or encoder queue.
+ * @brief consumes the read buffer by the number of bytes specified. This is
+ *  usually called after a complete message is decoded and consumed from the
+ *  buffer.
+ *
+ * @param bytes the number of bytes to consume from the read buffer
  */
-void NeoCell::Sleep(std::atomic<int>& ws)
+void NeoCell::Consume_Read_Buffer(const size_t bytes)
 {
-	while (Is_Running())
+	connection.read_buf.Consume(bytes);
+} // end Consume_Read_Buffer
+
+
+/**
+ * @brief resets the read buffer to be empty and ready for the next batch of
+ *  messages. This is usually called after a complete message is decoded and
+ *  consumed from the buffer.
+ */
+void NeoCell::Reset_Read_Buffer()
+{
+	connection.read_buf.Reset();
+} // end Reset_Read_Buffer
+
+
+/**
+ * @brief returns a pointer to the current read position in the read buffer.
+ *  This is usually called by the decoder loop when it is ready to decode
+ *  messages from the buffer.
+ *
+ * @return a pointer to the current read position in the read buffer
+ */
+u8* NeoCell::Get_Read_Buffer_Read_Ptr()
+{
+	return connection.read_buf.Read_Ptr();
+} // end Get_Read_Buffer_Read_Ptr
+
+
+/**
+ * @brief starts a TCP connection with Neo4j server either TLS enabled or not. On
+ *	successful connection, it negotiates the bolt protocol version with the peer.
+ *	It then registers it to epoll for it to actively poll read events. It finally
+ *	sets the client id from the parameter passed via Set_ClientID() memeber.
+ *
+ * @param id application defined connection identifer
+ *
+ * @return LB_OK on success. LB_RETRY on ssl/sys error. LB_FAIL on epoll register
+ *	error.
+ */
+LBStatus NeoCell::Handshake(const int id)
+{
+	connection.Set_ClientID(id);
+	LBStatus rc = connection.Connect();
+	if (!LB_OK(rc)) return LB_Add_Stage(rc, LBStage::LB_STAGE_HANDSHAKE);
+
+	rc = connection.Negotiate_Version();
+	if (!LB_OK(rc)) return LB_Add_Stage(rc, LBStage::LB_STAGE_HANDSHAKE);
+
+	// set non-blocking and enable keepalive
+	connection.Enable_NonBlock();
+	connection.Enable_Keepalive();
+
+	// register to epoll
+	epoll_event ev{};
+	ev.events = EPOLLIN | EPOLLET;
+	ev.data.ptr = this;
+	if (epoll_ctl(epfd, EPOLL_CTL_ADD, Get_Socket(), &ev) < 0)
 	{
-		int c = ws.fetch_sub(1, std::memory_order_acq_rel);
-		if (c <= 0) break;		// not sleeping anymore
+		return LB_Make(
+			LBAction::LB_FAIL, 
+			LBDomain::LB_DOM_SYS,
+			LBStage::LB_STAGE_HANDSHAKE, 
+			LBCode::LB_CODE_NONE, 
+			errno
+		);
+	} // end if error adding to epoll
 
-		ws.wait(c);
-	} // end while
-} // end Sleep_Encoder
+	connection.Set_ClientID(id);
+	return rc;	// should be 0k
+} // end Connect_Tcp
 
-
-/**
- * @brief sets the running state of the cell
- */
-void NeoCell::Set_Running(const bool state)
-{
-	running.store(state, std::memory_order_release);
-} // end Set_Running
 
 
 /**
- * @brief returns true if the cell is running
+ * @brief invokes connection's Poll_Readable() and returns the result
+ *	as is.
+ *
+ * @return LB_OK on success, LB_RETRY/LB_FAIL on failure.
  */
-bool NeoCell::Is_Running() const
+LBStatus NeoCell::Poll_Read()
 {
-	return running.load(std::memory_order_acquire);
-} // end Is_Running
+	return connection.Poll_Readable();
+} // end Poll_Read
 
 
+/**
+ * @brief the encoder loop encodes or calls the connection functions based on
+ *	the command type info given by CellCommand structure. Once all the rquest_queue
+ *	items are done, or flushed to peer, the thread is put to sleep until woken by
+ *	Add_QCount() method or similar.
+ */
+LBStatus NeoCell::Execute_Command(CellCommand& cmd)
+{
+	LBStatus rc = 0;
+	switch (cmd.type)
+	{
+	case CellCmdType::Run:
+		rc = connection.Run(cmd.cypher, cmd.param, cmd.extra, cmd.n);
+		break;
+
+	case CellCmdType::Begin:
+		rc = connection.Begin(cmd.param);
+		break;
+
+	case CellCmdType::Commit:
+		rc = connection.Commit(cmd.param);
+		break;
+
+	case CellCmdType::Rollback:
+		rc = connection.Rollback(cmd.param);
+		break;
+
+	case CellCmdType::Logoff:
+		rc = connection.Logoff();
+		break;
+
+	default:
+		//connection.err_string = "Encoder loop, command violation. Aborted thread.";
+		return LB_Make(LBAction::LB_FAIL);
+	} // end switch
+
+	if (LB_OK(rc)) requests.Enqueue(std::move(cmd));
+	return rc;
+} // end Write_Loop
+
+
+/**
+ * @breif marks buffer position for decoding starting from ptr. It decodes everything
+ *	it can between the start and its size in bytes. If data is trimmed or cut to the 
+ *	end it marks the position and recv more. It also notifies callers as soon as
+ *	the current recv buffer frame is ready via atomic::notify_all or callbacks to reduce
+ *	waiting latency on the user side.
+ * 
+ * @param ptr the starting position in the current buffer frame
+ * @param bytes the number of bytes for the view/frame of buffer
+ * 
+ * @return LOB_OK on success, alas LB_FAIL/RETRY on failure.
+ */
 LBStatus NeoCell::Decode_Response(u8* ptr, const size_t bytes)
 {
 	size_t decoded = 0; // tacks decoded bytes thus far
 	LBStatus rc = 0;    // holds return values
 
-	//Utils::Dump_Hex((const char*)ptr, bytes);
+#ifdef _DEBUG
+	Utils::Print("Decoding response, bytes received: %zu", bytes);
+	Utils::Dump_Hex((const char*)ptr, bytes);
+#endif
 
-	auto task = tasks.Front();
-	int total_decode = bytes + task->get().prev_bytes;
-	task->get().prev_bytes = 0;				// reset the left over bytes for the next batch
-	task->get().view.cursor = ptr;			// set the cursor to the start of the buffer
-	task->get().view.size = total_decode;	// set the size to the number of bytes received
+	int total_decode = bytes + leftover_bytes;
+	leftover_bytes = 0;		// reset for next round
 
 	while (decoded < total_decode)
 	{
-		rc = connection.Can_Decode(task->get().view.cursor, total_decode - decoded);
+		auto task = connection.tasks.Front();
+		if (!task.has_value())
+			return LBOK_INFO(total_decode);		// treat as done.
+
+		task->get().view.cursor = ptr;			// set the cursor to the start of the buffer
+		task->get().view.size = total_decode;	// set the size to the number of bytes received
+
+		rc = connection.Can_Decode(ptr, total_decode - decoded);
 		if (!LB_OK(rc))
 		{
 			if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
 			{
-				task->get().prev_bytes = total_decode - decoded;	// set the left over bytes for the next batch
+				leftover_bytes = total_decode - decoded;	// set the left over bytes for the next batch
 				return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_BOLT,
-					LBCode::LB_CODE_NONE, decoded);
+					LBStage::LB_STAGE_DECODEING_TASK, LBCode::LB_CODE_NONE, decoded);
 			} // end if appended info
 
 			return rc;
 		} // end if cannot decode
 
-		rc = connection.Decode_One(task.value());
-		LBAction action = LBAction(LB_Action(rc));
+		rc = connection.Decode_One(task->get());
 		u32 aux = LB_Aux(rc);
-		if (action != LBAction::LB_OK && action != LBAction::LB_HASMORE)
-			return rc;
-
-		decoded += aux;					// get the number of bytes decoded and add it to the total
-		task->get().view.cursor += aux;	// move the cursor forward by the number of bytes decoded
-
-		// are done with this task?
-		if (task->get().is_done)
-		{
-			if (task->get().cb)
-			{
-				task->get().cb(task->get().result);
-			} // end if callback
-			else
-			{
-				// move the result to the result queue for user to fetch
-				rqueue.Enqueue(std::move(task->get().result));
-				connection.Wake();
-			} // end else
-			
-			// clock latency
-			connection.latencies.Record_Latency(
-				std::chrono::high_resolution_clock::now() -
-				task->get().start_clock
-			);
-
-			tasks.Dequeue();		// remove the task from the queue
-			task = tasks.Front();	// get the next task to process
-			if (!task.has_value()) break;	// no more tasks to process
-
-			// set it up for the next task
-			task->get().view.cursor = ptr + decoded;	// move the cursor to the next position
-			task->get().view.size = bytes - decoded;	// set the remaining size to decode for the next task
-		} // end if done
-		
+		decoded += aux;			// get the number of bytes decoded and add it to the total
+		ptr += aux;				// move the cursor forward by the number of bytes decoded
 	} // end while
 
-	return LB_OK_INFO(decoded);
+	// update the buffer stats with what's actually decoded
+	connection.read_buf.Adaptive_Tick(decoded);  // EMA based growth/shrink
+	return LBOK_INFO(decoded);
 } // end Decode_Response
