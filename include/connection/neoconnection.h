@@ -174,5 +174,10 @@ private:
         &NeoConnection::Handle_Record,
         &NeoConnection::Success_Record,
         &NeoConnection::Success_Reset,  // error?
+        &NeoConnection::Success_Reset,
+        &NeoConnection::Success_Reset,
+        &NeoConnection::Success_Reset,
+        &NeoConnection::Success_Reset,
+        &NeoConnection::Success_Reset,
     };
 };

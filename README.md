@@ -2,16 +2,18 @@
 A high-speed neo4j C++ driver over bolt protocol
 
 Build (Linux):
-
+```
 mkdir bulid && cd build
 cmake ..
 make
+```
 
-Example direct query via async callbacks:
+Example 1 direct query via async callbacks:
 ```cpp
 #include "neodriver.h"
 #include "bolt_result.h"
 
+static std::atomic<int> completed{ 0 };
 int main()
 {
 	NeoDriver driver(
@@ -21,10 +23,47 @@ int main()
 
 	driver.Execute_Async(
     		"MATCH (n) AS n RETURN n LIMIT 25", 
-    		[](BoltResult res) {
+    		[](BoltResult& res) {
 			for (auto r : res) std::cout << r.ToString() << "\n";
+
+            completed.fetch_add(1, std::memory_order_acq_rel);
 		}
 	);
+
+    // wait for compleletion.
+    while (completed.load(std::memory_order_acquire) < 1)
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+}
+```
+Example 2 synchronous query via fetch 
+```cpp
+#include "neodriver.h"
+#include "bolt_result.h"
+
+static std::atomic<int> completed{ 0 };
+int main()
+{
+	NeoDriver driver(
+		"bolt://localhost:7687",
+		Auth::Basic("username", "password")
+	);
+
+    NeoCell* pcell = driver.Get_Session();
+    if (!pcell) Fatal("%s", driver.Get_Last_Error());
+
+	pcell->Execute(
+    		"MATCH (n) AS n RETURN n LIMIT 25"
+	);
+
+    BoltResult res;     // get's the result stream as an iterator
+    LBStatus rc = pcell->Fetch(res);
+    if (!LB_OK(rc)) Fatal("%s", pcell->Get_Last_Error());
+
+    for (auto r : res) 
+        std::cout << r.ToString() << std::endl;
+
+    std::cout << res.fields.ToString() << "\n"
+        << res.summary.ToString() << std::endl;
 }
 ```
 

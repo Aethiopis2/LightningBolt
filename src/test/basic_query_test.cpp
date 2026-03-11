@@ -51,7 +51,7 @@ void Test_Record_Fetch()
     for (size_t i = 0; i < iterations; i++)
     {
         NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", ""));
+            Auth::Basic("neo4j", "tobby@melona"));
         NeoCell* pcell = driver.Get_Session();
 
         if (!pcell)
@@ -68,18 +68,16 @@ void Test_Record_Fetch()
 
                 BoltResult out;
                 int ret = pcell->Fetch(out);
-                if (out.Is_Error())
+                if (out.error)
                 {
-                    Dump_App_Err("%s", out.err.ToString().c_str());
+                    Dump_App_Err("%s", pcell->Get_Last_Error().c_str());
                     continue;
                 } // end if
 
-#ifdef _DEBUG
                 Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
                     Utils::Print("Records: %s", v.ToString().c_str());
                 Utils::Print("Summary: %s", out.summary.ToString().c_str());
-#endif
 
                 auto end = std::chrono::high_resolution_clock::now();
                 durs.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());

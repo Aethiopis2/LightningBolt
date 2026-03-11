@@ -240,6 +240,7 @@ void NeoDriver::Poll_Read()
 						else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
 						{
 							pcell->Consume_Read_Buffer(LB_Aux(rc));
+							rc = LB_Make();
 							continue;	// keep polling if we have more to decode
 						} // end else
 					} // end if decode error

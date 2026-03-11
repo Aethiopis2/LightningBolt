@@ -303,7 +303,8 @@ LBStatus NeoConnection::Logon(TaskState& state)
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage logon = (BoltValue(BOLT_LOGON, { pauth[0] }));
     LBStatus rc = Encode_And_Flush(TaskState::Logon, logon);
-    
+    tasks.Dequeue();        // remove it
+
     Release_Pool<BoltValue>(offset);
     return rc;
 } // end Logon
@@ -976,6 +977,7 @@ LBStatus NeoConnection::Encode_And_Flush(TaskState s, BoltMessage& msg)
  */
 inline LBStatus NeoConnection::Success_None(DecoderTask& task)
 {
+    Wake();
     tasks.Dequeue();
     return LBOK_INFO(task.view.size);
 } // end if None
@@ -1004,6 +1006,9 @@ inline LBStatus NeoConnection::Success_Hello(DecoderTask& task)
     BoltResult r;
     r.done = true;  // not gonna care about meta
     results.Enqueue(std::move(r));
+    latencies.Record_Latency(
+        std::chrono::high_resolution_clock::now() - task.start_clock
+    );
     tasks.Dequeue();
     Wake();         // unhalt the waiting process
 
@@ -1064,8 +1069,8 @@ inline LBStatus NeoConnection::Success_Record(DecoderTask& task)
             LBStage::LB_STAGE_QUERY,
             LBCode::LB_CODE_NONE, LB_Aux(rc));
 
-    tasks.Dequeue();
     Wake();
+    tasks.Dequeue();
     return LBOK_INFO(LB_Aux(rc));  // should be LB_OK_INFO
 } // end Success_Record
 
@@ -1079,6 +1084,7 @@ inline LBStatus NeoConnection::Success_Record(DecoderTask& task)
  */
 inline LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 {
+    tasks.Dequeue();
     read_buf.Reset();
     return LBOK_INFO(task.view.size);
 } // end Success_Reset
@@ -1131,15 +1137,10 @@ inline LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     TaskState qs = task.state;
     switch (qs)
     {
-    case TaskState::Hello:
-    case TaskState::Logon:
-    case TaskState::Logoff:
-        action = LBAction::LB_FAIL;
-        tasks.Dequeue();
-        Wake();
-        break;
-
     case TaskState::Run:
+        /*if (!std::string("Neo.TransientError.General.DatabaseUnavailable").compare(r.begin().bv(0)["neo4j_code"].ToString()) )
+            action = LBAction::LB_HASMORE;
+        else action = LBAction::LB_FAIL;*/
         /*if (!std::string("Neo.ClientError.Cluster.NotALeader").compare(task.result.err.msg(0)["neo4j_code"].ToString()) ||
             !std::string("Neo.ClientError.General.ForbiddenOnReadOnlyDatabase").compare(task.result.err.msg(0)["neo4j_code"].ToString()))
             action = LBAction::LB_REROUTE;
@@ -1147,9 +1148,14 @@ inline LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
             !std::string("Neo.TransientError.Transaction.DeadlockDetected").compare(task.result.err.msg(0)["neo4j_code"].ToString()))
             action = LBAction::LB_RETRY;
         else action = LBAction::LB_FAIL;*/
-        action = LBAction::LB_FAIL;
+        action = LBAction::LB_HASMORE;      // expects a pull ignored
         break;
 
+    default:
+        action = LBAction::LB_FAIL;
+        tasks.Dequeue();
+        Wake();
+        break;
     }; // end switch
 
     return LB_Make(action, domain, 
@@ -1169,6 +1175,22 @@ inline LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
 inline LBStatus NeoConnection::Handle_Ignored()
 {
     auto task = tasks.Dequeue();
+    auto res = results.Front();
+    if (res.has_value())
+    {
+        if (!std::string("Neo.TransientError.General.DatabaseUnavailable").
+            compare(res->get().begin().bv(0)["neo4j_code"].ToString()))
+        {
+            Reset();
+            return LB_Make(
+                LBAction::LB_RETRY,
+                LBDomain::LB_DOM_BOLT,
+                LBStage::LB_STAGE_AUTH,
+                LBCode::LB_CODE_NONE,
+                task->view.size);
+        } // end if transient error
+    } // end if has value
+
     if (tasks.Is_Empty())
         return Reset();
 
