@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 13th of April 2025, Sunday.
- * @date updated 27th of Feburary 2026, Friday.
+ * @date updated 17th of March 2026, Tuesday.
  */
 #ifndef __NEO_ERROR_H
 #define __NEO_ERROR_H
@@ -15,15 +15,23 @@
 //===============================================================================|
 #include "basics.h"
 
-class NeoCell;      // forward declartion
 
 
 
 //===============================================================================|
-//          ENUMS
+//          TYPES & ENUMS
 //===============================================================================|
+class NeoCell;
 
-
+/**
+ * LB uses a 64-bit packed error codes to determine source of errors and apply 
+ *	a global handler for fails. The packed fields are as follows:
+ *	1. Bits 63-56 - unused.
+ *  2. Bits 55-48 - action = encodes one of the possible actions to take on fail
+ *  3. Bits 47-40 - domain = encodes who is responsible and hints at where
+ *  4. Bits 39-32 - code   = encodes extra code for driver specific errors
+ *  5. Bits 31-0  - Aux	   = Auxillary info, contains errno's, return values etc
+ */
 // action aka what to do?
 enum class LBAction : u8
 {
@@ -44,28 +52,9 @@ enum class LBDomain : u8
 	LB_DOM_NONE,	// nothing is going on				
 	LB_DOM_SYS,		// syscall / kernel
 	LB_DOM_SSL,		// ssl level aka openssl lib
-	LB_DOM_BOLT,	// bolt protocol ver negotiation or decoding
 	LB_DOM_NEO4J,	// neo4j server
-	LB_DOM_ROUTING,	// routing error may need refreshing
 	LB_DOM_MEMORY,	// memory error, alloc fail in pool or boltvalue pool
-	LB_DOM_STATE	// msc internal driver state
-};
-
-
-// where in the driver lifecycle did the error occur?
-enum class LBStage : u8
-{
-	LB_STAGE_NONE,		// nothing is going on
-	LB_STAGE_CONNECT,
-	LB_STAGE_HANDSHAKE,
-	LB_STAGE_HELLO,
-	LB_STAGE_AUTH,
-	LB_STAGE_SESSION,
-	LB_STAGE_QUERY,
-	LB_STAGE_DECODE,
-	LB_STAGE_DECODEING_TASK,
-	LB_STAGE_ROUTE,
-	LB_STAGE_TEARDOWN,
+	LB_DOM_DRIVER	// msc internal driver error
 };
 
 
@@ -77,9 +66,6 @@ enum class LBCode : u8
 	LB_CODE_PROTO,		// decoding error, unexpected protocol
 	LB_CODE_ENCODER,	// encoding error can't go further
 	LB_CODE_TASKSTATE,	// an invalid task state for the call
-
-	LB_CODE_NEO4J_CONNECT,	// server error's during neo4j connection; TCP Connect + HELLO + LOGON
-	LB_CODE_NEO4J_QUERY,	// query request
 
 	LB_CODE_STATE_QUEUE_MEM,	// out of queue memory
 	LB_CODE_STATE_QUEUE_SIZE,	// invalid queue size 
@@ -101,7 +87,6 @@ using LBStatus = u64;
  * 
  * @param action to undertake - 8-bit value
  * @param domain or ownership - 8-bit value
- * @param stage or lifecycle stage - 8-bit value
  * @param code specific code - 8-bit value
  * @param aux or extra or system related identifer - 32-bits
  */
@@ -109,12 +94,11 @@ constexpr LBStatus LB_Make
 (
 	LBAction action = LBAction::LB_OK,
 	LBDomain domain = LBDomain::LB_DOM_NONE,
-	LBStage stage = LBStage::LB_STAGE_NONE,
 	LBCode code = LBCode::LB_CODE_NONE,
 	u32 aux = 0
 )
 {
-	return ((u64(action) << 56) | (u64(domain) << 48) | (u64(stage) << 40) |
+	return ((u64(action) << 48) | (u64(domain) << 40) | 
 		(u64(code) << 32) | (u64(aux)));
 } // end LB_Make
 
@@ -122,36 +106,27 @@ constexpr LBStatus LB_Make
 /**
  * @brief returns the action from the status
  */
-constexpr u8 LB_Action(LBStatus s) 
+constexpr LBAction LB_Action(LBStatus s) 
 {
-	return u8((s >> 56) & 0xFF);
+	return LBAction((s >> 48) & 0xFF);
 } // end LB_Action
 
 
 /**
  * @brief returns the domain or owner of the status
  */
-constexpr u8 LB_Domain(LBStatus s) 
+constexpr LBDomain LB_Domain(LBStatus s) 
 {
-	return u8((s >> 48) & 0xFF);
+	return LBDomain((s >> 40) & 0xFF);
 } // LB_Domain
-
-
-/**
- * @brief returns the domain or owner of the status
- */
-constexpr u8 LB_Stage(LBStatus s)
-{
-	return u8((s >> 40) & 0xFF);
-} // LB_Stage
 
 
 /**
  * @brief returns the auxillary/payload info in lower half of quad word
  */
-constexpr u8 LB_Code(LBStatus s)
+constexpr LBCode LB_Code(LBStatus s)
 {
-	return u8((s >> 32) & 0xFF);
+	return LBCode((s >> 32) & 0xFF);
 } // end LB_Code
 
 
@@ -165,36 +140,37 @@ constexpr u32 LB_Aux(LBStatus s)
 
 
 /**
- * @brief returns a true if status is OK/success with no quirks
+ * @brief returns a true if status is OK/success by comparing only
+ *	the action and domain portion of status feild and igonores the code
+ *	and aux part out of the equation; i.e. never checks for those.
+ * 
+ * @param s the status to check encoded in LBStatus format
  */
 constexpr bool LB_OK(LBStatus s) 
 {
-	return (LB_Action(s) == 0 && LB_Domain(s) == 0);
+	return 
+	(
+		LB_Action(s) == LBAction::LB_OK && 
+		LB_Domain(s) == LBDomain::LB_DOM_NONE
+	);
 } // end LB_OK
 
 
 /**
- * @brief returns an LB_OK with embded extra info
+ * @brief returns an LB_OK with embded extra auxillary info
  *
  * @param aux the code to embed into lower 32-bits of quad
  */
 constexpr LBStatus LBOK_INFO(u32 aux)
 {
-	return LB_Make(LBAction::LB_OK, LBDomain::LB_DOM_NONE,
-		LBStage::LB_STAGE_NONE, LBCode::LB_CODE_NONE, aux);
+	return LB_Make
+	(
+		LBAction::LB_OK, 
+		LBDomain::LB_DOM_NONE,
+		LBCode::LB_CODE_NONE, 
+		aux
+	);
 } // end LB_OK_INFO
-
-
-/**
- * @brief adds a stage to the status, useful for debugging and tracing
- *
- * @param s the status to add the stage to
- * @param stage the stage to add to the status
- */
-constexpr LBStatus LB_Add_Stage(LBStatus s, LBStage stage)
-{
-	return s | (u64(stage) << 40);
-} // end LB_Add_Stage
 
 
 LBStatus LB_Handle_Status(LBStatus status, NeoCell* pcell);

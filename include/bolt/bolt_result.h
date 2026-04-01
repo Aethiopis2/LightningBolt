@@ -32,13 +32,17 @@ struct BoltResult
     BoltDecoder* pdec;     // pointer to the decoder for the result
     BoltMessage fields;    // the field names for the record
     BoltMessage summary;   // the summary message at end of records
+	std::string error_msg;   // error message if any, empty otherwise
 
     size_t message_count{ 0 };  // count of messages contained within records
 	size_t total_bytes{ 0 };    // total bytes consumed by the records
     size_t start_offset{ 0 };   // start of message offset in the pool
-    bool error{ false };        // determines if this stream is a failed one
     bool done{ false };         // when true, streaming is done and summary is ready.
+    bool error{ false };        // determines if this stream is a failed one
     int client_id = 0;          // debugging purposes, to id threads.
+
+    std::chrono::_V2::system_clock::time_point start_clock =
+        std::chrono::high_resolution_clock::now();  // starting point for timer, always now!
 
     struct iterator
     {
@@ -60,12 +64,11 @@ struct BoltResult
         { 
             LBStatus rc = pdecoder->Decode(cursor, bv);
             if (LB_OK(rc)) cursor += LB_Aux(rc);
-            else
-                bv.type = BoltType::Unk;  // mark as unknown on error
+            else bv.type = BoltType::Unk;  // mark as unknown on error
 
             return *this; 
 		} // end pre-increment
-        bool operator!=(const iterator& other) const { return cursor != other.cursor; }
+        bool operator!=(const iterator& other) const { return cursor < other.cursor; }
     };
 
     BoltResult() = default;
@@ -77,8 +80,8 @@ struct BoltResult
         pdec = other.pdec;
         fields = other.fields;
         summary = other.summary;
-        error = other.error;
         done = other.done;
+        error = other.error;
         client_id = other.client_id;
         message_count = other.message_count;
 		total_bytes = other.total_bytes;

@@ -69,15 +69,16 @@ int main()
 
 Running test samples (build directory):
 
+```
 ./bin/encoder_decoder_test	# runs speed benchmark tests for cooked samples
 ./bin/streaming_batch_test	# mild tests on batched encoding/decoding speed benchmarks
 ./bin/connection_test		# aggressively tests the connection/disconnection test (stability test)
 ./bin/basic_query_test		# runs a speed benchmark test on cooked query samples in simulated synchronized mode
 ./bin/async_qbenchmark_test	# runs a speed benchmark test on cooked query over async threaded (pooled) mode
 ./bin/percentile_test		# runs a QPS and percentile tests as latency measures on a cooked query
+```
 
-
-Project Structure:
+## Project Structure:
 ```
 |- include
    |- bolt
@@ -127,7 +128,7 @@ Project Structure:
    |- neoerr.cpp		# implementation of error handlers and display functions
 ```
 
-Bolt Protocol:
+## Bolt Protocol:
 
 Bolt is a binary protocol used by neo4j graph database. Its based on PackStream v1.0 specs, in which
 a value is preceeded by a byte value (tag) which defines the type and size of data it encodes or serializes.
@@ -141,7 +142,7 @@ Example:
 
 Refer to bolt protocol for details, here.
 
-Philosophy:
+## Philosophy:
 
 In a client server model, consider the moment at which the server sends its responses for a given query request over TCP/IP enabled network.
 The response is copied over application supplied buffers as bolt serialized binary data, this is done during recv()
@@ -177,7 +178,7 @@ the minimum receiving buffer size is 64K + 4 bytes (2 byte header + 2 byte trail
 rarely cared as its simply same as decoder size at initialization and because feedback loops can adjust it to an optimal size (see 
 BoltBuf for details).
 
-Architecture:
+## Architecture:
 
 To meet the above philosophical and real life constraints, I have approached the whole thing in a cellular manner. I.e. much
 like biological cells. A cell can function in isolation, thus a NeoConnection object wrapped around NeoCell object should be
@@ -192,7 +193,7 @@ minimizing allocations and leaks and keeping the cache hot and more predictable.
 which are pretty much the norm these days, LightningBolt will execute requests/results in parallel on most days, and thus
 should naturally be fast, hence the name LightningBolt.
 
-Internals:
+## Internals:
 
 I'm going to do this in the way the process evolved beginning with the first objects I've tackled that aid in bolt packet
 serialization/deserialization which I simply dubbed `BoltEncoder` and `BoltDecoder`, then followed by a connection object
@@ -200,7 +201,7 @@ serialization/deserialization which I simply dubbed `BoltEncoder` and `BoltDecod
 a pool object, `NeoPool` for fast access and concurrency managed by the main driver object, `NeoDriver` which allows users
 to run queries and do other stuff such as obtain pointers to `NeoCell`s for explicit control.
 
-1. BoltValue
+### 1. BoltValue
 
 Bolt is optimized for memory use but its packed in such ways that makes access to its contents from the perspective of a 
 C/C++ program a little strange. Nonetheless built on strict rules thus manageable. As the bolt spec states, every bolt content
@@ -300,7 +301,7 @@ for distinguishing different bolt types.
 Provides access to underlying elements through direct invocation of union elements or through the use of ToString() method,
 which returns a string formatted version of bolt. This is useful during web transmission as string data.
 
-2. BoltEncoder
+### 2. BoltEncoder
 
 This object is defined in include/bolt/bolt_encoder.h, and its purpose is to serialize data according to bolt specs. The class
 provides only a single interface, Enocde(), which is a template method taking on various types. The class also takes a reference
@@ -330,7 +331,7 @@ Message                     318.162              3.14305e+06
 *Note: Compound types such as maps and structs were tested on deeply nested structures as the above
 	BoltValue snap shows in section BoltValue.
 
-3. BoltDecoder
+### 3. BoltDecoder
 
 The object defined in `include/bolt/bolt_decoder.h`, and its helper definition `include/bolt/bolt_jump_table.h` and implementation at
 `src/bolt/bolt_jump_table.cpp`. Bolt is tag based, and because each tag mean something, its possible to prepare a jump table of functions
@@ -359,9 +360,33 @@ Struct                      134.255              7.44851e+06
 Message                     135.823               7.3625e+06
 ```
 
-## TcpClient
+### 4. NeoConnection
 
-### Minimal High-Performance TCP / TLS Client
+This is the main object that defines the connection with neo4j protocol and implements the functions required for bolt encoding/decoding
+messages. Its found in `include/connection/neoconnection.h` and its implementation at `src/connection/neoconnection.cpp`. The object sits
+atop TCP sockets and provides the main interface for sending and receiving bolt messages. It also provides the main interface for executing 
+queries and fetching results. It is designed to be used by the **NeoCell** object, which is a wrapper around it that provides the async model 
+and session management. NeoConnection is designed to be as low level as possible, thus it doesn't do any buffering or anything of the sort, 
+it simply sends and receives data from the network and decodes/encodes bolt messages on demand. 
+It also provides an interface for error handling and reporting. The connection object is designed to be used in a single thread context, 
+thus it doesn't have any locks or anything of the sort, it relies on the NeoCell wrapper to provide the necessary synchronization and async model.
+In other words, its an object providing interfaces to bolt protocol and implements Neo4j specific functions such as `Run`, `Pull`, and `Discard` 
+which are the main functions used in bolt protocol for executing queries and fetching results.
+
+
+### 5. NeoCell
+
+
+### 6. NeoPool
+
+
+### 7. NeoDriver
+
+
+### Misc and Helpers
+### 8. TcpClient
+
+#### Minimal High-Performance TCP / TLS Client
 
 A minimal, low-level **TCP / TLS client abstraction** designed for performance-critical systems.
 
@@ -599,7 +624,7 @@ If you need control, this is the right layer.
 
 ---
 
-6. BoltBuf:
+### 8. BoltBuf: Adaptive High-Performance I/O Buffer
 
 y[n]=αy[n−1]+(1−α)⋅CurrentD
 discrete-time leaky integrator / exponential moving average (EMA).
@@ -798,8 +823,14 @@ pool.Release(10);
 
 // Or reset the entire pool
 pool.Reset_All();
+```
 
-4. Error Handling
+
+### 9. LockFreeQueue
+
+### 10. Latency Histogram measurments
+
+### 11. Error Handling
 LB_Status format 64-bit:
 
 63                                                               0

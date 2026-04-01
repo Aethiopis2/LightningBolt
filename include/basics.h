@@ -2,8 +2,8 @@
  * @author Rediet Worku aka Aethiops II ben Zahab (aethiopis2rises@gmail.com)
  * 
  * @version 1.2
- * @date created 1st of December 2023, Friday
- * @date updated 18th of January 2026, Sunday
+ * @date created 1st of December 2023, Friday.
+ * @date updated 17th of March 2026, Tuesday.
  */
 #ifndef REDBASICS_H
 #define REDBASICS_H
@@ -131,6 +131,8 @@
 #endif
 
 
+
+
 //=====================================================================================|
 //          TYPES
 //=====================================================================================|
@@ -151,7 +153,7 @@ typedef __int128_t s128;
 //=====================================================================================|
 //          DEFINES
 //=====================================================================================|
-#define APP_NAME        "⚡LightningBolt"      // Application name
+#define APP_NAME        "⚡"      // Application name/prompt
 
 
 

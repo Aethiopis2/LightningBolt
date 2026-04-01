@@ -2,8 +2,8 @@
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.2
- * @date created 9th of April 2025, Wednesday
- * @date updated 25th of June 2026, Sunday.
+ * @date created 9th of April 2025, Wednesday.
+ * @date updated 22nd of March 2026, Sunday.
  */
 
 
@@ -41,9 +41,8 @@ int main()
             Fatal("%s", driver.Get_Last_Error().c_str());
 
         Utils::Print("Connected %d times and completed in %ld milliseconds",
-            (int)(i + 1), pcell->Wall_Latency());
+            (int)(i + 1), pcell->Avg_Latency());
 
-        driver.Close();
         Utils::Print("Disconnected");
     } // end outer for
 

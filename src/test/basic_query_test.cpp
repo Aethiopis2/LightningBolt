@@ -2,8 +2,8 @@
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.2
- * @date created 9th of April 2025, Wednesday
- * @date updated 26th of Feburary 2026, Thrusday
+ * @date created 9th of April 2025, Wednesday.
+ * @date updated 22nd of March 2026, Sunday.
  */
 
 
@@ -37,7 +37,7 @@ struct Test
         "                            ",
         "                            ",
         " ",
-        "       "
+        "     "
     };
 };
 
@@ -51,7 +51,7 @@ void Test_Record_Fetch()
     for (size_t i = 0; i < iterations; i++)
     {
         NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", "tobby@melona"));
+            Auth::Basic("neo4j", ""), BoltValue::Make_Map(), 8);
         NeoCell* pcell = driver.Get_Session();
 
         if (!pcell)
@@ -68,15 +68,18 @@ void Test_Record_Fetch()
 
                 BoltResult out;
                 int ret = pcell->Fetch(out);
-                if (out.error)
-                {
-                    Dump_App_Err("%s", pcell->Get_Last_Error().c_str());
-                    continue;
-                } // end if
 
                 Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
-                    Utils::Print("Records: %s", v.ToString().c_str());
+                {
+                    if (!out.error)
+                        Utils::Print("Records: %s", v.ToString().c_str());
+                    else
+                    {
+                        Dump_App_Err("%s", v.ToString().c_str());
+                        continue;
+                    }
+                }
                 Utils::Print("Summary: %s", out.summary.ToString().c_str());
 
                 auto end = std::chrono::high_resolution_clock::now();
@@ -90,11 +93,11 @@ void Test_Record_Fetch()
                 Utils::Print("cypher: %s%s\truns: %dx\tAvg time: %lld \u00B5s", test.cypher[k],
                     test.spaces[k], test.rounds[k], avg);
 
-				std::cout << "\nHistogram latencies: ";
+				/*std::cout << "\nHistogram latencies: ";
 				std::cout << "\np50: " << pcell->Percentile(0.50) << " ms\n";
 				std::cout << "p95: " << pcell->Percentile(0.95) << " ms\n";
 				std::cout << "p99: " << pcell->Percentile(0.99) << " ms\n";
-                std::cout << "Wall Latency: " << pcell->Wall_Latency() << " ms\n";
+                std::cout << "Wall Latency: " << pcell->Avg_Latency() << " ms\n";*/
 				pcell->Clear_Histo();
             } // end if 
             else

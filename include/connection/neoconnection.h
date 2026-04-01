@@ -2,8 +2,8 @@
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.0
- * @date created 9th of April 2025, Wednesday
- * @date updated 27th of Feburary 2026, Friday
+ * @date created 9th of April 2025, Wednesday.
+ * @date updated 22nd of March 2026, Sunday.
  */
 #pragma once
 
@@ -25,6 +25,9 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
+class NeoCell;
+
+
 /**
  * @brief neo4j server version info, I only care of major and minor ones;
  *  appears in reverse order in little-endian.
@@ -46,18 +49,14 @@ struct Neo4jVerInfo
 //===============================================================================|
 //          CLASS
 //===============================================================================|
-// forward declation
-class NeoCell;
-
-
 /**
- * brief a connection abstraction. The main query engine, NeoCell, would get to
- *  use this object to send and recv from neo4j server instance. The class contains
- *  members is_open, a boolean flag that is true when connected to a server, an
- *  optional client_id that is used for identification.
- *
- * The class makes use of specialized buffer object BoltBuf and high speed
- *  encoder/decoder objects that allows it to send/recv from neo4j db via bolt.
+ * brief NeoConnection is a TcpClient object that immplements Neo4j supported 
+ *  messages using bolt protocol. It makes use of object BoltEncoder, BoltDecoder
+ *  and a specialized cache-aligned adaptive buffer, BoltBuf, to encode or decode
+ *  bolt packets over tcp stream ssl encrypted or not.
+ * 
+ * The object isn't generally meant to be used as is, as it delibertaly lacks
+ *  state and complete control mechanisims for network flow.
  */
 class NeoConnection : public TcpClient
 {
@@ -68,51 +67,46 @@ public:
     NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
 
-    LBStatus Negotiate_Version();
-    LBStatus Send_Hellov5(TaskState& state);
-    LBStatus Send_Hellov4(TaskState& state);
-    LBStatus Logon(TaskState& state);
+    LBStatus Handshake(const int epfd, void* pobj, const int id);
+    LBStatus Send_Hellov5();
+    LBStatus Send_Hellov4();
+    LBStatus Logon();
     LBStatus Run(const char* cypher, 
         const BoltValue& params, 
         const BoltValue& extras, 
-        const int chunks,
-        std::function<void(BoltResult&)> cb = nullptr);
+        const int chunks);
     LBStatus Begin(const BoltValue& options = BoltValue::Make_Map());
     LBStatus Commit(const BoltValue& options = BoltValue::Make_Map());
     LBStatus Rollback(const BoltValue& options = BoltValue::Make_Map());
 
-    int Pull(const int n);
-    int Discard(const int n);
-    int Telemetry(const int api);
+    LBStatus Pull(const int n);
+    LBStatus Discard(const int n);
+    LBStatus Telemetry(const int api);
     LBStatus Reset();
     LBStatus Logoff();
-    int Goodbye();
-    int Ack_Failure();
-    int Route(BoltValue routing,
+    LBStatus Goodbye();
+    LBStatus Ack_Failure();
+    LBStatus Route(BoltValue routing,
         BoltValue bookmarks = BoltValue::Make_List(),
         const std::string& database = "neo4j",
         BoltValue extra = BoltValue::Make_Map());
 
     void Terminate();
-    void Set_ClientID(const int cli_id);
     void Set_Host_Address(const std::string& host, const std::string& port);
 
 private:
 
-    // connection paramters; kept inside driver
-    BoltValue* pauth;       // authentication token
-    BoltValue* pextras;     // extra connection parameters
-
     int client_id;          // optional connection identifer
     int tran_count;		    // number of transactions executed; simulates nesting
-	int current_msg_len;    // length of the current message being decoded; used for partial decoding
+    int current_msg_len;    // length of the current message being decoded; used for partial decoding
     int unconsumed_count;   // prevents infinite loops due to Compact and Consume stalls
 
     bool recv_paused;           // have we paused recv because of mem issues?
-    std::atomic<bool> is_done;  // used to notifiy whenever a streaming batch is ready
+    std::atomic<bool> should_wait;  // used to hack the startup on auto retries to avoid waits!
 
-    LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query requests & responses
-    LockFreeQueue<BoltResult> results;  // queue of results ready to be fetched by the user
+    // connection paramters; kept inside driver
+    BoltValue* pauth;       // authentication token
+    BoltValue* pextras;     // extra connection parameters
 
     // storage buffers
     BoltBuf read_buf;
@@ -121,37 +115,37 @@ private:
     BoltEncoder encoder;
     BoltDecoder decoder;
 
-    Neo4jVerInfo supported_version; // holds major and minor versions for server
-    LatencyHistogram latencies;     // latency measurement structure
+    LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query responses
+    Neo4jVerInfo supported_version;     // holds major and minor versions for server
 
 
     //====================
     // utilities
     //====================
+    bool Is_Record_Done(BoltMessage& summary);
+
+    LBStatus Negotiate_Version();
     LBStatus Poll_Writable();
     LBStatus Poll_Readable();
-    LBStatus Decode_One(DecoderTask& task);
+    LBStatus Decode_One(BoltResult& result);
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
-    int Get_Client_ID() const;
     LBStatus Flush();
-
-    bool Is_Record_Done(BoltMessage& summary);
     LBStatus Encode_And_Flush(TaskState s, BoltMessage& v);
+    inline LBStatus Enqueue_Task(TaskState s);
+    LBStatus Retry_Encode(BoltMessage&);
 
     // state based handlers
-    inline LBStatus Success_None(DecoderTask& task);
-    inline LBStatus Success_Hello(DecoderTask& task);
-    inline LBStatus Success_Run(DecoderTask& task);
-    inline LBStatus Success_Record(DecoderTask& task);
-    inline LBStatus Success_Reset(DecoderTask& task);
+    inline LBStatus Success_None(BoltResult& task);
+    inline LBStatus Success_Hello(BoltResult& task);
+    inline LBStatus Success_Run(BoltResult& task);
+    inline LBStatus Success_Record(BoltResult& task);
+    inline LBStatus Success_Reset(BoltResult& task);
 
-    inline LBStatus Handle_Record(DecoderTask& task);
-    inline LBStatus Handle_Failure(DecoderTask& task);
-    inline LBStatus Handle_Ignored();
+    inline LBStatus Handle_Record(BoltResult& task);
+    inline LBStatus Handle_Failure(BoltResult& task);
+    inline LBStatus Handle_Ignored(BoltResult& task);
 
     void Encode_Pull(const int n);
-    void Wait_Task();
-    void Wake();
 
     BoltMessage Routev43(const BoltValue& routing,
         const BoltValue& bookmarks,
@@ -162,22 +156,25 @@ private:
         const std::string& database);
     BoltMessage Route_Legacy(const BoltValue& routing);
 
-    LBStatus Retry_Encode(BoltMessage&);
 
-    using Success_Fn = LBStatus (NeoConnection::*)(DecoderTask&);
-    Success_Fn success_handler[QUERY_STATES]{
-        &NeoConnection::Success_None,      //simply passes over
-        &NeoConnection::Success_Hello,
-        &NeoConnection::Success_Hello,
-        &NeoConnection::Success_None,      // contains no meta info
-        &NeoConnection::Success_Run,
-        &NeoConnection::Handle_Record,
-        &NeoConnection::Success_Record,
-        &NeoConnection::Success_Reset,  // error?
-        &NeoConnection::Success_Reset,
-        &NeoConnection::Success_Reset,
-        &NeoConnection::Success_Reset,
-        &NeoConnection::Success_Reset,
-        &NeoConnection::Success_Reset,
+    // success handler table
+    using Success_Fn = LBStatus (NeoConnection::*)(BoltResult&);
+    Success_Fn success_handler[QUERY_STATES]
+    {
+        &NeoConnection::Success_None,       // TaskState::None - do nothing program or is done
+        &NeoConnection::Success_Hello,      // TaskState::Hello - handles hello message
+        &NeoConnection::Success_Hello,      // TaskState::Logon - handles logon message
+        &NeoConnection::Success_None,       // TaskState::Logoff - do nothing
+        &NeoConnection::Success_Run,        // TaskState::Run - handles SUCCESS message for RUN message
+        &NeoConnection::Handle_Record,      // TaskState::Pull - handles RECORD message for PULL message
+        &NeoConnection::Success_Record,     // TaskState::Record - handles SUCCESS for RECORD message
+        &NeoConnection::Success_None,       // TaskState::Discard - SUCCESS for discard message
+        &NeoConnection::Success_None,       // TaskState::Begin - success handler for BEGIN message
+        &NeoConnection::Success_Reset,      // TaskState::Commit - success handler for COMMIT message
+        &NeoConnection::Success_Reset,      // TaskState::Rollback - success handler for ROLLBACK message
+        &NeoConnection::Success_Reset,      // TaskState::Route - success handler for ROUTE message
+        &NeoConnection::Success_Reset,      // TaskState::Reset - success handler for RESET message
+        &NeoConnection::Success_None,       // TaskState::Telemetry - do nothing handler for TELMETRY message
+        &NeoConnection::Success_None,       // TaskState::Ack_Failure - do nothing handler for v1 Ack_Failure
     };
 };

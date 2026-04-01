@@ -33,6 +33,14 @@ void FetchCallbackFn(BoltResult& res)
     /*std::cout << "=======================\n";
       std::cout << "thread id: " << res.client_id << "\n";
       std::cout << res.fields.ToString() << "\n";*/
+    if (res.error)
+    {
+        Utils::Print("Error: %s", res.error_msg.c_str());
+        records.fetch_add(1, std::memory_order_relaxed);
+        completed.fetch_add(1, std::memory_order_relaxed);
+        return;
+	} // end if error
+
       for (auto v : res);
         //Utils::Print("Records: %s", v.ToString().c_str());
     /*std::cout << res.summary.ToString() << "\n";
@@ -43,15 +51,14 @@ void FetchCallbackFn(BoltResult& res)
 } // end FetchCallbackFn
 
 
+
 int main()
 {
-    constexpr int QUERY_COUNT = 1000;
+    constexpr int QUERY_COUNT = 1;
     std::string url = "bolt://localhost:7687";
     BoltValue basic = Auth::Basic("neo4j", "");
 
-    NeoDriver driver(url, basic, BoltValue::Make_Map(), 8);
-
-
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 1);
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) 

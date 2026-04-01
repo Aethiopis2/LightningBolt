@@ -63,8 +63,12 @@ public:
         {
             u8 tag = *pos;
             if (!jump_table[tag](pos, out))    
-                return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
-                    LBStage::LB_STAGE_DECODE, LBCode::LB_CODE_PROTO);
+                return LB_Make
+                (
+                    LBAction::LB_FAIL, 
+                    LBDomain::LB_DOM_DRIVER, 
+                    LBCode::LB_CODE_PROTO
+                );
         } // end while
         
         buf.Consume(size);
@@ -127,8 +131,12 @@ public:
         {
             u8 tag = *pos;
             if (!jump_table[tag](pos, msg.msg))
-                return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT,
-                    LBStage::LB_STAGE_DECODE, LBCode::LB_CODE_PROTO);
+                return LB_Make
+                (
+                    LBAction::LB_FAIL,
+                    LBDomain::LB_DOM_DRIVER,
+                    LBCode::LB_CODE_PROTO
+                );
         } // end while
         
 
@@ -162,8 +170,12 @@ public:
         {
             u8 tag = *pos;
             if (!jump_table[tag](pos, msg.msg))
-                return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_BOLT, 
-                    LBStage::LB_STAGE_DECODE, LBCode::LB_CODE_PROTO);
+                return LB_Make
+                (
+                    LBAction::LB_FAIL,
+                    LBDomain::LB_DOM_DRIVER,
+                    LBCode::LB_CODE_PROTO
+                );
         } // end while
 
         u32 consumed = msg.chunk_size + 2;

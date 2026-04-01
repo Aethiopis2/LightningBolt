@@ -1,9 +1,9 @@
 /**
  * @author Rediet Worku, Dr. aka Aethiopis II ben Zahab (PanaceaSolutionsEth@gmail.com)
  * 
- * @version 1.4
- * @date created 3rd of March, Sunday
- * @date updated 2nd of March 2026, Sunday
+ * @version 1.5
+ * @date created 3rd of March, Sunday.
+ * @date updated 17th of March 2026, Tuesday.
  */
 
 
@@ -171,7 +171,7 @@ std::string Utils::Get_Formatted_String(const std::string &app_name)
 
     std::time(&curr_time);
     snprintf(buf, MAXPATH, "\033[33m%s\033[37m", app_name.c_str());
-    std::strftime(buf + strlen(buf), MAXPATH, " \033[34m%d-%b-%y, %T\033[37m: ", 
+    std::strftime(buf + strlen(buf), MAXPATH, "\033[34m%d-%b-%y, %T\033[37m> ", 
         localtime(&curr_time));
 
     return buf;
@@ -319,13 +319,21 @@ std::string Utils::Generate_UUID()
 
 
 /**
- * @brief Prints title; i.e. company name and website info among other things.
+ * @brief Prints title; i.e. company name and website info.
  * 
  */
 void Utils::Print_Title(const std::string coname, const std::string url)
 {
-    std::cout << "\n\t     \033[36m" << coname << "\033[37m\n"
-        << "\t\t\033[34m" << url << "\033[037m\n" << std::endl;
+    const std::string indent = "\t\t";
+
+    int diff = coname.length() - url.length();
+
+    std::string name_pad = (diff < 0) ? std::string((-diff) / 2, ' ') : "";
+    std::string url_pad = (diff > 0) ? std::string(diff / 2, ' ') : "";
+
+    std::cout << "\n"
+        << indent << name_pad << "\033[36m" << coname << "\033[0m\n"
+        << indent << url_pad << "\033[34m" << url << "\033[0m\n\n";
 } // end Print_Ttile
 
 

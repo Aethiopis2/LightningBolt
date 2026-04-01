@@ -42,5 +42,8 @@ public:
 private:
 
 	std::vector<std::unique_ptr<NeoCell>> workers;	// pool of workers
+
+	std::vector<NeoConnection*> leaders;		// pointers for cluster routing
+	std::vector<NeoConnection*> followers;
 	std::atomic<size_t> idx_counter{ 0 };
 };

@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 17th of January 2026, Saturday.
- * @date updated 4th of March 2026, Wednesday.
+ * @date updated 17th of March 2026, Tuesday.
  */
 #pragma once
 
@@ -22,19 +22,6 @@ constexpr static int MAX_EVENTS = 1024;
 constexpr static int POOL_SIZE = 1;
 
 
-enum class DbMode
-{
-    Read,
-    Write
-};
-
-struct Session
-{
-    std::string query;
-    std::vector<std::string> bookmarks;
-    std::string db;
-    DbMode mode;
-};
 
 //===============================================================================|
 //          CLASS
@@ -69,19 +56,19 @@ private:
     BoltValue _extras;       // any extra connection params (power user mode, not me).
 
     int pool_size;
-    int epfd;                   // event file descriptor for polling
+    std::vector<int> epfds;     // event file descriptor for polling threads
     int exit_fd;                // used for exits in epoll
     u64 next_client_id;         // id for the next connection in the pool
     LBStatus last_rc;           // store's the last return value which maybe an error
     epoll_event events[MAX_EVENTS];   // epoll events array
 
     std::string last_err;       // last error string 
-    std::thread poll_thread;    // polls ready connections
+    std::vector<std::thread> poll_threads;   // polls ready connections
     std::atomic<bool> looping;
 
     NeoCellPool* pool;          // pointer to an instance of pool
 
-    void Poll_Read();
+    void Poll_Read(int epfd);
 
     struct RouteTable
     {

@@ -1,9 +1,9 @@
 /**
  * @author Rediet Worku aka Aethiopis II ben Zahab (Aethiopis2rises@gmail.com)
  * 
- * @version 2.0
- * @date created 9th of April 2025, Wednesday
- * @date updated 27th of Feburary 2026, Friday
+ * @version 2.2
+ * @date created 09th of April 2025, Wednesday.
+ * @date updated 18th of March 2026, Wedensday.
  */
 
 
@@ -271,8 +271,13 @@ LBStatus TcpClient::Connect()
     } while ((p_alias = p_alias->ai_next) != NULL);
 
     // at the end of the day if socket is null
-    return LB_Make(LBAction::LB_RETRY, LBDomain::LB_DOM_SYS,
-        LBStage::LB_STAGE_CONNECT, LBCode::LB_CODE_NONE, errno);
+    return LB_Make
+    (
+        LBAction::LB_RETRY, 
+        LBDomain::LB_DOM_SYS,
+        LBCode::LB_CODE_NONE, 
+        errno
+    );
 } // end Connect
 
 
@@ -304,6 +309,33 @@ LBStatus TcpClient::Recv(void* buf, const int len)
 } // end Recv
 
 
+/**
+ * @brief registers a socket for epoll event in listening.
+ * 
+ * @param epfd epoll file descriptor
+ * @param pobj pointer to an object containing connection
+ * 
+ * @return LB_OK on success, alas LB_FAIL.
+ */
+LBStatus TcpClient::Register(int epfd, void* pobj)
+{
+    // register to epoll
+    epoll_event ev{};
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = pobj;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev) < 0)
+    {
+        return LB_Make
+        (
+            LBAction::LB_FAIL,
+            LBDomain::LB_DOM_SYS,
+            LBCode::LB_CODE_NONE,
+            errno
+        );
+    } // end if error adding to epoll
+
+    return LB_Make();
+} // end Register
 
 
 //===============================================================================|
@@ -346,8 +378,13 @@ LBStatus TcpClient::Fill_Addr()
     WSADATA wsa;        // required by the startup function
     if (WSAStartup(MAKEWORD(2, 2), &wsa))
     {
-        return LB_Make(LB_Action::LB_FAIL, LB_Domain::LB_DOM_SYS, 
-            LBCode::LB_CODE_NONE, static_cast<u32>(WSAGetLastErrror()));
+        return LB_Make
+        (
+            LB_Action::LB_FAIL, 
+            LB_Domain::LB_DOM_SYS, 
+            LBCode::LB_CODE_NONE, 
+            static_cast<u32>(WSAGetLastErrror())
+        );
     } // end if start up
 
 #endif
@@ -359,19 +396,26 @@ LBStatus TcpClient::Fill_Addr()
     
     // get an address info
     if (getaddrinfo(hostname.c_str(), port.c_str(), &hints, &paddr) != 0)
-        return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_SYS,
-            LBStage::LB_STAGE_CONNECT, LBCode::LB_CODE_NONE, errno);
+    {
+        return LB_Make
+        (
+            LBAction::LB_FAIL, 
+            LBDomain::LB_DOM_SYS,
+            LBCode::LB_CODE_NONE, 
+            errno
+        );
+    } // end if addr err
 
     return LB_Make();       // success
 } // end Fill_Addr
 
 
 /**
- * @brief Initalizes SSL library and creates context and ssl object. For first
- *  time it also loads and initalizes openssl libs.
+ * @brief Initalizes SSL library and creates context and ssl object for first
+ *  time and it also loads and initalizes openssl libs.
  *
  * @return LB_0K on success, LB_FAIL on ssl error with openssl error code 
- *  packed into LBStatus
+ *  packed into LBStatus aux feild.
  */
 LBStatus TcpClient::Init_SSL()
 {
@@ -387,9 +431,15 @@ LBStatus TcpClient::Init_SSL()
     const SSL_METHOD* method = TLS_client_method();
     ctx = SSL_CTX_new(method);
     if (!ctx)
-        return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_SSL,
-            LBStage::LB_STAGE_CONNECT, LBCode::LB_CODE_NONE, 
-            static_cast<u32>(ERR_get_error()));
+    {
+        return LB_Make
+        (
+            LBAction::LB_FAIL, 
+            LBDomain::LB_DOM_SSL,
+            LBCode::LB_CODE_NONE,
+            static_cast<u32>(ERR_get_error())
+        );
+    } // end if bad context
 
     ssl = SSL_new(ctx);
     return LB_Make();
@@ -406,9 +456,13 @@ LBStatus TcpClient::SSL_Connect()
     SSL_set_fd(ssl, fd);
     if (SSL_connect(ssl) <= 0)
     {
-        return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_SSL,
-            LBStage::LB_STAGE_CONNECT, LBCode::LB_CODE_NONE, 
-            static_cast<u32>(ERR_get_error()));
+        return LB_Make
+        (
+            LBAction::LB_FAIL, 
+            LBDomain::LB_DOM_SSL,
+            LBCode::LB_CODE_NONE, 
+            static_cast<u32>(ERR_get_error())
+        );
 	} // end if ssl connect error
 
     return LB_Make();
@@ -422,14 +476,15 @@ LBStatus TcpClient::SSL_Connect()
  * @param len length of the buffer above also returned with actual bytes read
  *
  * @return LB_0K with info of actual bytes sent on success, 
- *  LB_RETRY on error with errno packed into
+ *  LB_RETRY on error with errno packed into aux feild
  */
 LBStatus TcpClient::Send_Tcp(const void * buf, const int len)
 {
     int bytes_sent = 0;
     char* alias = (char*)buf;
 
-    do {
+    while (bytes_sent < len)
+    {
         ssize_t n = send(fd, alias, len - bytes_sent, 0);
         if (n <= 0)
         {
@@ -438,10 +493,10 @@ LBStatus TcpClient::Send_Tcp(const void * buf, const int len)
                 std::this_thread::yield();   // wait some and try again
                 continue;
             } // end if interrupted
-            else return LB_Make(
+            else return LB_Make
+            (
                 LBAction::LB_RETRY, 
                 LBDomain::LB_DOM_SYS,
-                LBStage::LB_STAGE_NONE, // stage is not known here
                 LBCode::LB_CODE_NONE, 
                 errno
             ); 
@@ -449,7 +504,7 @@ LBStatus TcpClient::Send_Tcp(const void * buf, const int len)
 
         bytes_sent += n;
         alias += n;
-    } while (bytes_sent < len);
+    } // end while
 
     return LBOK_INFO(bytes_sent);
 } // end Send_Tcp
@@ -471,10 +526,10 @@ LBStatus TcpClient::Recv_Tcp(void * buf, const int len)
     {
         if (errno == EINTR)
             return LB_Make(LBAction::LB_WAIT);          // try again a little later
-        else return LB_Make(
+        else return LB_Make
+        (
             LBAction::LB_RETRY, 
             LBDomain::LB_DOM_SYS,
-			LBStage::LB_STAGE_NONE, // stage can't be determined here
             LBCode::LB_CODE_NONE, 
             errno
         );     // other system call errors
@@ -498,7 +553,8 @@ LBStatus TcpClient::Send_Tcp_NonBlock(const void * buf, const int len)
     int bytes_sent = 0;
     char* alias = (char*)buf;
 
-    do {
+    while (bytes_sent < len)
+    {
         ssize_t n = send(fd, alias, len - bytes_sent, 0);
         if (n <= 0)
         {
@@ -507,10 +563,10 @@ LBStatus TcpClient::Send_Tcp_NonBlock(const void * buf, const int len)
                 std::this_thread::yield();      // try again a little later
                 continue;
             } // end if
-            else return LB_Make(
+            else return LB_Make
+            (
                 LBAction::LB_RETRY, 
                 LBDomain::LB_DOM_SYS, 
-				LBStage::LB_STAGE_NONE,     // stage can't be inferred here
                 LBCode::LB_CODE_NONE, 
                 errno
             );
@@ -518,7 +574,7 @@ LBStatus TcpClient::Send_Tcp_NonBlock(const void * buf, const int len)
 
         bytes_sent += n;
         alias += n;
-    } while (bytes_sent < len);
+    } // end while
 
     return LBOK_INFO(bytes_sent);
 } // end Send_Tcp_NonBlock
@@ -540,10 +596,10 @@ LBStatus TcpClient::Recv_Tcp_NonBlock(void * buf, const int len)
     {
         if (errno == EWOULDBLOCK || errno == EAGAIN)
             return LB_Make(LBAction::LB_WAIT);   // try again a little later
-        else return LB_Make(
+        else return LB_Make
+        (
             LBAction::LB_RETRY, 
             LBDomain::LB_DOM_SYS,
-			LBStage::LB_STAGE_NONE,     // stage can't be inferred here
             LBCode::LB_CODE_NONE, 
             errno
         );     // other system call errors
@@ -567,7 +623,8 @@ LBStatus TcpClient::SSL_Send(const void * buf, const int len)
     int bytes_sent = 0;
     char* alias = (char*)buf;
 
-    do {
+    while (bytes_sent < len)
+    {
         int n = SSL_write(ssl, alias, len - bytes_sent);
         if (n <= 0)
         {
@@ -579,16 +636,19 @@ LBStatus TcpClient::SSL_Send(const void * buf, const int len)
             } // end if 
             else
             {
-                return LB_Make(LBAction::LB_RETRY, LBDomain::LB_DOM_SSL,
-					LBStage::LB_STAGE_NONE, // stage can't be inferred here
+                return LB_Make
+                (
+                    LBAction::LB_RETRY, 
+                    LBDomain::LB_DOM_SSL,
                     LBCode::LB_CODE_NONE, 
-                    static_cast<u32>(ERR_get_error())); 
+                    static_cast<u32>(ERR_get_error())
+                ); 
             } // end else
         } // end if error condition
 
         bytes_sent += n;
         alias += bytes_sent;
-    } while (bytes_sent < len);
+    } // end while
 
     return LBOK_INFO(bytes_sent);
 } // end SSL_Send
@@ -600,7 +660,8 @@ LBStatus TcpClient::SSL_Send(const void * buf, const int len)
  * @param buf space to store the received bytes
  * @param len length of the buffer above also returned with actual bytes read
  *
- * @return LB_Ok or 0 on success, with actual bytes packed into LBStatus return
+ * @return LB_Ok or 0 on success, with actual bytes packed into LBStatus return.
+ *  On fail, LB_RETRY to try again, or LB_WAIT on connection would block.
  */
 LBStatus TcpClient::SSL_Recv(void * buf, const int len)
 {
@@ -612,10 +673,13 @@ LBStatus TcpClient::SSL_Recv(void * buf, const int len)
             return LB_Make(LBAction::LB_WAIT);          // try again a little later
         else
         {
-            return LB_Make(LBAction::LB_RETRY, LBDomain::LB_DOM_SSL,
-				LBStage::LB_STAGE_NONE, // stage can't be inferred here
+            return LB_Make
+            (
+                LBAction::LB_RETRY, 
+                LBDomain::LB_DOM_SSL,
                 LBCode::LB_CODE_NONE, 
-                static_cast<u32>(ERR_get_error()));   // other ssl errors
+                static_cast<u32>(ERR_get_error())
+            );   // other ssl errors
 		} // end else
     } // end if error condition
 

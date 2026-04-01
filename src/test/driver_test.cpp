@@ -26,11 +26,11 @@ static std::atomic<int> records{ 0 };
 int main()
 {
     // 1. start driver
-	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", ""));
+	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", "tobby@melona"));
     
 	BoltResult result;
     driver.Execute_Async(
-        [](BoltResult& result)
+        [&driver](BoltResult& result)
         {
             if (result.error) Fatal("%s", driver.Get_Last_Error().c_str());
 
@@ -43,9 +43,10 @@ int main()
             } // end for
             Utils::Print("Summary: %s", result.summary.ToString().c_str());
             completed.fetch_add(1, std::memory_order_acq_rel);
-        }, "MATCH (n) RETURN n");
+        }, "MATCH (n) RETURN n"
+    );
 
-        // 2. wait for completion
+    // 2. wait for completion
     while (completed.load(std::memory_order_acquire) < 1)
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
 

@@ -1,13 +1,9 @@
 /**
- * @file decoder_task.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
- * @brief
  * @version 1.0
- * @date 14th of May 2025, Wednesday
- *
- * @copyright Copyright (c) 2025
- *
+ * @date created 14th of May 2025, Wednesday.
+ * @date updated 20th of March 2026, Friday.
  */
 #pragma once
 
@@ -50,7 +46,7 @@ enum class TaskState : u8 {
     Telemetry,      // driver is expecting telemetry success/fail message
     Ack_Failure,    // driver is expecting ack_failure success/fail message
 };
-constexpr int QUERY_STATES = 16;
+constexpr int QUERY_STATES = 15;
 
 
 /**
@@ -92,13 +88,8 @@ struct DecoderTask
     TaskState state;        // current state of the query
     BoltView view;          // view into the buffer for this query
 
-    std::chrono::_V2::system_clock::time_point start_clock = 
-        std::chrono::high_resolution_clock::now();  // starting point for timer, always now!
-    std::function<void(BoltResult&)> cb = nullptr;  // a callback for async procs ideal for web apps.
-
     DecoderTask() = default;
     DecoderTask(TaskState s) : state(s) { }
-	DecoderTask(TaskState s, std::function<void(BoltResult&)> c) : state(s), cb(c) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

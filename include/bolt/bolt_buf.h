@@ -115,14 +115,12 @@ struct BufferStats
 
         if (ema_recv > capacity * grow_threshold)
         {
-            ++grow_hits;
-            shrink_hits = 0;
-            if (grow_hits >= grow_hits_required)
+            if (++grow_hits >= grow_hits_required)
             {
                 grow_hits = 0;
                 return true;
             } // end if grow
-            else grow_hits = 0;
+            else --grow_hits;
         } // end if ema_recv grow
 
         return false;
@@ -150,14 +148,12 @@ struct BufferStats
 
         if (ema_recv < capacity * shrink_theshold)
         {
-            ++shrink_hits;
-            grow_hits = 0;
-            if (shrink_hits >= shrink_hits_required)
+            if (++shrink_hits >= shrink_hits_required)
             {
                 shrink_hits = 0;
                 return true;
             } // end if shrinking fo real
-            else shrink_hits = 0;
+            else --shrink_hits;
         } // end if shrinking
 
         return false;
@@ -175,7 +171,7 @@ class alignas(CACHE_LINE_SIZE) BoltBuf
 {
 public:
 
-    BoltBuf(const size_t _capacity = 8192)
+    BoltBuf(const size_t _capacity = 8192*2)
         : capacity{Align_Capacity(_capacity)},
           raw_ptr{Allocate_Aligned(capacity)},
           data{raw_ptr.get()},

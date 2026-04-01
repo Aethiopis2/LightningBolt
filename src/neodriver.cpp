@@ -3,21 +3,16 @@
  *
  * @version 1.0
  * @date created 17th of January 2026, Saturday.
- * @date @date updated 4th of March 2026, Wednesday.
+ * @date updated 17th of March 2026, Tuesday.
  */
 
 
- //===============================================================================|
- //          INCLUDES
- //===============================================================================|
+//===============================================================================|
+//          INCLUDES
+//===============================================================================|
 #include <sys/eventfd.h>
 #include "neodriver.h"
 
-
-
-//===============================================================================|
-//          ENUM & TYPES
-//===============================================================================|
 
 
 
@@ -45,12 +40,17 @@ NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
 	} // end for copy
 
 	// create epoll instance for polling
-	epfd = epoll_create1(0);	// no flags, no checks
-	pool = new NeoCellPool(epfd, pool_size, _urls, &_auth, &_extras);
+	int n = std::thread::hardware_concurrency();
+	epfds.resize(n);
+	poll_threads.resize(n);
 
-	// start the polling thread
 	looping.store(true, std::memory_order_release);
-	poll_thread = std::thread(&NeoDriver::Poll_Read, this);
+	for (int i = 0; i < n; i++)
+	{
+		epfds[i] = epoll_create1(0);	// no flags, no checks
+		poll_threads[i] = std::thread(&NeoDriver::Poll_Read, this, epfds[i]);
+		pool = new NeoCellPool(epfds[i], pool_size, _urls, &_auth, &_extras);
+	} // end for
 } // end constructor
 
 
@@ -84,23 +84,34 @@ NeoDriver::~NeoDriver()
  * 
  * @return LB_OK on success, alas LB_FAIL.
  */
-LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb, const char* query, 
+LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb, 
+	const char* query, 
 	BoltValue&& params, BoltValue&& extra)
 {
-	// get the next instance from the pool, and execute on that
 	NeoCell* pcell = pool->Acquire();
-	if (!pcell) return LB_Make(
+	if (!pcell) return LB_Make
+	(
 		LBAction::LB_FAIL,
-		LBDomain::LB_DOM_STATE,
-		LBStage::LB_STAGE_QUERY
+		LBDomain::LB_DOM_DRIVER
 	);
 
-	// make sure its connected first, if not connect
 	LBStatus rc = pcell->Start_Session(++next_client_id);
-	if (!LB_OK(rc)) return rc;
+	if (!LB_OK(rc))
+	{
+		last_err = pcell->err_desc;
+		return rc;
+	} // end if no session
 
-	// just pass to pool
-	return pcell->Run_Async(cb, query, std::move(params), std::move(extra));
+	rc = pcell->Run_Async
+	(
+		cb, 
+		query, 
+		std::move(params), 
+		std::move(extra)
+	);
+	if (!LB_OK(rc))
+		last_err = pcell->err_desc;
+	return rc;
 } // end Execute_Async
 
 
@@ -132,14 +143,16 @@ void NeoDriver::Close()
 	ev.events = EPOLLIN;
 	ev.data.fd = exit_fd;
 
-	epoll_ctl(epfd, EPOLL_CTL_ADD, exit_fd, &ev);
-
 	pool->Stop();
-	write(exit_fd, &my_exit, sizeof(my_exit));
-	if (poll_thread.joinable()) poll_thread.join();
+	for (int i = 0; i < epfds.size(); i++)
+	{
+		epoll_ctl(epfds[i], EPOLL_CTL_ADD, exit_fd, &ev);
+		write(exit_fd, &my_exit, sizeof(my_exit));
+		if (poll_threads[i].joinable()) poll_threads[i].join();
+		CLOSE(epfds[i]);
+	} // end if 
 
 	CLOSE(exit_fd);
-	CLOSE(epfd);
 } // end Close
 
 
@@ -157,10 +170,6 @@ int NeoDriver::Get_Pool_Size() const
 
 std::string NeoDriver::Get_Last_Error() const
 {
-	LBDomain domain = LBDomain(LB_Domain(last_rc));
-	if (domain == LBDomain::LB_DOM_SYS || domain == LBDomain::LB_DOM_SSL)
-		return LB_Error_String(last_rc);
-
 	return last_err;
 } // end Get_Last_Error
 
@@ -192,7 +201,7 @@ NeoCellPool* NeoDriver::Get_Pool()
 } // end Get_Pool
 
 
-void NeoDriver::Poll_Read()
+void NeoDriver::Poll_Read(int epfd)
 {
 	while (looping.load(std::memory_order_acquire))
 	{
@@ -211,42 +220,25 @@ void NeoDriver::Poll_Read()
 				}
 
 				// ready to read, read it in and push task to decoder
-				LBStatus rc = 0;
-				do
+				LBStatus rc = LB_Make(LBAction::LB_HASMORE);
+				while (LB_Action(rc) == LBAction::LB_HASMORE)
 				{
 					rc = pcell->Poll_Read();
 					if (!LB_OK(rc))
 					{
 						if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
 						{
+							pcell->Stop();	// kill it
 							break;
 						} // end if fail
-						else if (LBAction(LB_Action(rc)) == LBAction::LB_RETRY)
-						{
-							break;
-						} // end else
-						else break; // LB_WAIT or other non-fatal, non-retryable errors, just wait for next event
+						else break; // should be wait only
 					} // end if error
-
 
 					// now begin decoding, if we have a full message
 					rc = pcell->Decode_Response(pcell->Get_Read_Buffer_Read_Ptr(), LB_Aux(rc));
-					if (!LB_OK(rc))
-					{
-						if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
-						{
-							break;
-						} // end if fail
-						else if (LBAction(LB_Action(rc)) == LBAction::LB_HASMORE)
-						{
-							pcell->Consume_Read_Buffer(LB_Aux(rc));
-							rc = LB_Make();
-							continue;	// keep polling if we have more to decode
-						} // end else
-					} // end if decode error
-
-					pcell->Consume_Read_Buffer(LB_Aux(rc));
-				} while (LB_OK(rc));
+					/*if (pcell->tasks.Is_Empty() && pcell->requests.Is_Empty())
+						pcell->Reset_Read_Buffer();*/
+				} // end while
 			} // end if readable
 		} // end for nfds
 	} // end while looping

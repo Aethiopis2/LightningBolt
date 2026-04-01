@@ -1,9 +1,9 @@
 /**
  * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  * 
- * @version 2.0
- * @date created 9th of April 2025, Wednesday
- * @date updated 10th of Feburary 2026, Tuesday
+ * @version 2.2
+ * @date created 09th of April 2025, Wednesday.
+ * @date updated 18th of March 2026, Wedensday.
  */
 #pragma once
 
@@ -70,6 +70,7 @@ public:
     LBStatus Connect();
     LBStatus Send(const void* buf, const int len);
     LBStatus Recv(void* buf, const int len);
+    LBStatus Register(const int epfd, void* pobj);
 
 protected:
 
