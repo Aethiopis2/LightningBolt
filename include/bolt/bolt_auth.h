@@ -47,6 +47,13 @@ static constexpr char PRODUCT_VALUE[] = "LightningBolt/v1.0.0";
 static constexpr char PLATFORM_VALUE[] = "Linux Debian 12; x64";
 static constexpr char LANGUAGE_VALUE[] = "C++/20";
 
+// Misc
+static constexpr char URL_SEPARATOR[]   = "://";
+static constexpr char BOLT_NORMAL[]     = "bolt";
+static constexpr char BOLT_SSL[]        = "bolt+s";
+static constexpr char NEO4J_NORMAL[]    = "neo4j";
+static constexpr char NEO4J_SSL[]       = "neo4j+s";
+
 
 /**
  * @brief helper functions to create authentication tokens for different

@@ -2,8 +2,8 @@
   @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.0
- * @date created 24th of December 2025, Tuesday
- * @date updated 18th of January 2026, Sunday
+ * @date created 24th of December 2025, Tuesday.
+ * @date updated 15th of April 2026, Wednesday.
  */
 #pragma once
 
@@ -26,24 +26,55 @@
 //===============================================================================|
 //          CLASS
 //===============================================================================|
-class NeoCellPool
+class NeoPool
 {
 public:
 
-	NeoCellPool(int epfd, size_t nworkers, std::string& urls,
+	NeoPool
+	(
+		int epfd_, 
+		bool ssl,
+		bool clustred,
+		int id,
+		size_t ncells, 
+		std::string& urls,
 		BoltValue* pauth, 
-		BoltValue* pextras = nullptr);
+		BoltValue* pextras = nullptr
+	);
 
-	LBStatus Start(const bool all_connections = false);
-	void Stop();
+	NeoPool(NeoPool&& other) noexcept
+		: epfd(other.epfd),
+		core_id(other.core_id),
+		cells(std::move(other.cells)),   // move, not copy
+		rr(other.rr.load())
+	{
+		// no need to clear other.cells, move already empties it
+	}
+
+	NeoPool& operator=(NeoPool&& other) noexcept 
+	{
+		if (this != &other) 
+		{
+			epfd = other.epfd;
+			core_id = other.core_id;
+			cells = std::move(other.cells);   // move, not copy
+			rr.store(other.rr.load());
+		}
+		return *this;
+	}
+
+	NeoPool(const NeoPool&) = delete;
+	NeoPool& operator=(const NeoPool&) = delete;
+
 	NeoCell* Acquire();
-	const std::vector<std::unique_ptr<NeoCell>>& Workers() const;
+	inline const std::vector<std::unique_ptr<NeoCell>>& Cells() const;
+	void Close();
 
 private:
 
-	std::vector<std::unique_ptr<NeoCell>> workers;	// pool of workers
+	int epfd;
+	int core_id;
 
-	std::vector<NeoConnection*> leaders;		// pointers for cluster routing
-	std::vector<NeoConnection*> followers;
-	std::atomic<size_t> idx_counter{ 0 };
+	std::vector<std::unique_ptr<NeoCell>> cells;
+	std::atomic<size_t> rr{ 0 };
 };

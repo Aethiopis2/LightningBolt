@@ -33,16 +33,18 @@ int main()
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", ""));
+        std::string con = "";
+        NeoDriver driver(con,
+            Auth::Basic("neo4j", "tobby@melona"));
 
-        NeoCell* pcell = driver.Get_Session();
-        if (!pcell)
-            Fatal("%s", driver.Get_Last_Error().c_str());
+        NeoSession session;
+        LBStatus rc = driver.Get_Session(session);
+        if (!LB_OK(rc))
+            Fatal("Failed to get session %d", (int)(i + 1));
 
-        Utils::Print("Connected %d times and completed in %ld milliseconds",
-            (int)(i + 1), pcell->Avg_Latency());
+        Utils::Print("Connected %d times", (int)(i + 1));
 
+        session.Close();
         Utils::Print("Disconnected");
     } // end outer for
 

@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 15th of April 2025, Tuesday.
- * @date updated 4th of March 2026, Wednesday.
+ * @date updated 20th of April 2026, Monday.
  */
 #pragma once
 
@@ -48,7 +48,7 @@
 //===============================================================================|
 //          GLOBALS
 //===============================================================================|
-static constexpr size_t MIN_CAPACITY = 65'536 + 4;  // chunk size + tail
+static constexpr size_t MIN_CAPACITY = 8192;        // chunk size + tail
 static constexpr size_t TAIL_SIZE = 1024;           // an emergency tail region
 
 
@@ -115,6 +115,7 @@ struct BufferStats
 
         if (ema_recv > capacity * grow_threshold)
         {
+            shrink_hits = 0;
             if (++grow_hits >= grow_hits_required)
             {
                 grow_hits = 0;
@@ -148,6 +149,7 @@ struct BufferStats
 
         if (ema_recv < capacity * shrink_theshold)
         {
+			//grow_hits = 0;
             if (++shrink_hits >= shrink_hits_required)
             {
                 shrink_hits = 0;
@@ -171,7 +173,7 @@ class alignas(CACHE_LINE_SIZE) BoltBuf
 {
 public:
 
-    BoltBuf(const size_t _capacity = 8192*2)
+    BoltBuf(const size_t _capacity = MIN_CAPACITY)
         : capacity{Align_Capacity(_capacity)},
           raw_ptr{Allocate_Aligned(capacity)},
           data{raw_ptr.get()},
@@ -332,35 +334,38 @@ public:
      * 
 	 * @return 0 on success and -1 on failure
      */
-    inline int Grow()
+    inline int Grow(const size_t start_offset)
     {
         size_t new_capacity = capacity << 1;
+
+#ifdef _DEBUG
+        Utils::Print("Buffer growing from %d to %d bytes.", capacity, new_capacity);
+#endif
 
         auto new_raw_ptr = Allocate_Aligned(new_capacity);
         if (!new_raw_ptr)
 			return -1;      // failed to allocate
 
         u8* new_data = new_raw_ptr.get();
-        size_t used = write_offset - read_offset;
-
-#ifdef _DEBUG
-        std::cout << "Buffer grow: " << capacity <<
-            " --> " << new_capacity << std::endl;
-#endif
+        size_t used = write_offset - start_offset;
 
         //if (used > 0)
+        //{
+        //    iCpy(new_data, data + start_offset, used);
+        //    write_offset = used;
+        //    read_offset = read_offset - start_offset;
+        //} // end if copy only used
+        //else
             iCpy(new_data, data, capacity);
 
         raw_ptr = std::move(new_raw_ptr);
         data = new_data;
         capacity = new_capacity;
 
-        /*write_offset = used;
-        read_offset = 0;*/
 		return 0;  // success
     } // end Grow
 
-    
+
     /**
      * @brief shrinks the buffer to twice the used capacity or clamps it at
      *  a defined MIN_CAPACITY which is 65k in this imp, 16-bit is max message size.
@@ -454,11 +459,15 @@ public:
     /**
      * @brief updates the ema_recv value for buffer stats on every call, and
      *  decides if buffer should grow, shrink or neither based on recv cycle trends.
+     * 
+     * @param bytes_this_cycle the number of bytes to evaluate for this cycle
+     * @param start_offset the starting offset to keep when growing or shrinking
      */
-    inline void Adaptive_Tick(size_t bytes_this_cycle)
+    inline void Adaptive_Tick(size_t bytes_this_cycle, const size_t start_offset)
     {
         stat.Update(bytes_this_cycle);
-        if (stat.Evaluate_Grow(capacity)) Grow();
+        if (stat.Evaluate_Grow(capacity))
+            Grow(start_offset);
         else if (stat.Evaluate_Shrink(capacity)) Shrink();
     } // end Adaptive_Tick
 
@@ -468,14 +477,14 @@ public:
      *  recv. The function copies whats left towards the start and resets
      *  the read offset and and adjusts the write to the end of whats left.
      */
-    inline bool Compact()
+    inline bool Compact(const size_t start_offset)
     {
-        if (read_offset == 0) return false;     // compacted already
+        if (start_offset == 0) return false;     // compacted already
 
-        if (write_offset > read_offset)
+        if (write_offset > start_offset)
         {
-            size_t whats_left = write_offset - read_offset;
-            iCpy(Data(), Read_Ptr(), whats_left);
+            size_t whats_left = write_offset - start_offset;
+            iCpy(data, data + start_offset, whats_left);
 
             read_offset = 0;
             write_offset = whats_left;

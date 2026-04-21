@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 17th of January 2026, Saturday.
- * @date updated 17th of March 2026, Tuesday.
+ * @date updated 15th of April 2026, Wednesday.
  */
 #pragma once
 
@@ -12,6 +12,9 @@
  //          INCLUDES
  //===============================================================================|
 #include "neopool.h"
+#include "neorouter.h"
+#include "neosession.h"
+
 
 
 
@@ -23,6 +26,67 @@ constexpr static int POOL_SIZE = 1;
 
 
 
+/**
+ * @brief structure that allows different contexts per core and allows for 
+ *  NUMA aware pool structures.
+ */
+class CoreContext
+{
+public:
+
+    int core_id;
+    int epfd;
+    int exit_fd;
+
+    NeoPool pool;
+    NeoRouter router;
+
+    std::thread poll_thread;
+    std::atomic<bool> running{ true };
+
+    CoreContext
+    (
+        int id,
+        int epfd_,
+		int exit_fd_,
+        NeoPool&& pool_
+    ) : core_id(id), epfd(epfd_), exit_fd(exit_fd_), 
+        pool(std::move(pool_)), router(pool)
+    {
+        struct epoll_event ev {};
+        ev.events = EPOLLIN;
+        ev.data.fd = exit_fd;
+
+        epoll_ctl(epfd, EPOLL_CTL_ADD, exit_fd, &ev);
+	} // end constructor
+
+	CoreContext(const CoreContext&) = delete;
+	CoreContext& operator=(const CoreContext&) = delete;
+
+    CoreContext(CoreContext&& other) noexcept
+        : core_id(other.core_id), epfd(other.epfd), exit_fd(other.exit_fd),
+          pool(std::move(other.pool)), router(pool),
+          poll_thread(std::move(other.poll_thread)), running(other.running.load())
+    {
+	} // end move constructor
+
+    CoreContext& operator=(CoreContext&& other) noexcept
+    {
+        if (this != &other)
+        {
+            core_id = other.core_id;
+            epfd = other.epfd;
+            exit_fd = other.exit_fd;
+            pool = std::move(other.pool);
+            router = std::move(other.router);
+            poll_thread = std::move(other.poll_thread);
+            running.store(other.running.load());
+        }
+        return *this;
+	} // end move assign
+};
+
+
 //===============================================================================|
 //          CLASS
 //===============================================================================|
@@ -30,7 +94,7 @@ class NeoDriver
 {
 public:
 
-    NeoDriver(const std::string& urls, BoltValue auth,
+    NeoDriver(std::string& urls, BoltValue auth,
         BoltValue extra = BoltValue::Make_Map(),
         const int pool_size_ = POOL_SIZE);
     ~NeoDriver();
@@ -39,15 +103,12 @@ public:
         BoltValue&& params = BoltValue::Make_Map(), BoltValue&& extra = BoltValue::Make_Map());
     LBStatus Execute(const char* query, BoltValue&& params = BoltValue::Make_Map(),
         BoltValue&& extra = BoltValue::Make_Map());
+	LBStatus Get_Session(NeoSession& handle);
     int Fetch(BoltResult& result);
 
     void Close();
-    void Set_Pool_Size(const int nsize);
-    int Get_Pool_Size() const;
 
     std::string Get_Last_Error() const;
-    NeoCell* Get_Session();
-    NeoCellPool* Get_Pool();
 
 private:
 
@@ -55,29 +116,13 @@ private:
     BoltValue _auth;         // authentication token
     BoltValue _extras;       // any extra connection params (power user mode, not me).
 
-    int pool_size;
-    std::vector<int> epfds;     // event file descriptor for polling threads
-    int exit_fd;                // used for exits in epoll
-    u64 next_client_id;         // id for the next connection in the pool
-    LBStatus last_rc;           // store's the last return value which maybe an error
-    epoll_event events[MAX_EVENTS];   // epoll events array
+    u64 next_client_id;     // id for the next connection in the pool
+	bool ssl_on;           // ssl on or off
+	bool clustred;         // single or cluster
 
-    std::string last_err;       // last error string 
-    std::vector<std::thread> poll_threads;   // polls ready connections
-    std::atomic<bool> looping;
+    std::vector<CoreContext> _cores;
+    std::atomic<size_t> rr_core{ 0 };
 
-    NeoCellPool* pool;          // pointer to an instance of pool
-
-    void Poll_Read(int epfd);
-
-    struct RouteTable
-    {
-        std::string writer;     // address to leader in a cluster
-        std::vector<std::string> readers;   // bunch of replica + followers in a cluster
-        std::vector<std::string> routes;    // redundant from our perpective but can mask out replicas
-        std::string database;               // which database is in the cluster
-        s64 ttl;                // time to live, route refresh rate as defined by server
-    };
-
-    RouteTable route_table;     // instance
+    inline size_t Next_Core();
+    void Poll_Loop(CoreContext& ctx);
 };

@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 9th of April 2025, Wednesday.
- * @date updated 22nd of March 2026, Sunday.
+ * @date updated 20th of April 2026, Monday.
  */
 #pragma once
 
@@ -17,7 +17,6 @@
 #include "bolt/decoder_task.h"
 #include "bolt/bolt_auth.h"
 #include "utils/lock_free_queue.h"
-#include "utils/red_stats.h"
 
 
 
@@ -64,7 +63,8 @@ class NeoConnection : public TcpClient
 
 public:
 
-    NeoConnection(const std::string& urls, BoltValue* pauth, BoltValue* pextras);
+	NeoConnection(bool ssl_enabled,
+        const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
 
     LBStatus Handshake(const int epfd, void* pobj, const int id);
@@ -75,7 +75,7 @@ public:
         const BoltValue& params, 
         const BoltValue& extras, 
         const int chunks);
-    LBStatus Begin(const BoltValue& options = BoltValue::Make_Map());
+    LBStatus Begin(const BoltValue& options);
     LBStatus Commit(const BoltValue& options = BoltValue::Make_Map());
     LBStatus Rollback(const BoltValue& options = BoltValue::Make_Map());
 
@@ -93,6 +93,9 @@ public:
 
     void Terminate();
     void Set_Host_Address(const std::string& host, const std::string& port);
+
+    std::string Get_Hostname() const;
+    std::string Get_Port() const;
 
 private:
 
@@ -131,19 +134,19 @@ private:
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
     LBStatus Flush();
     LBStatus Encode_And_Flush(TaskState s, BoltMessage& v);
-    inline LBStatus Enqueue_Task(TaskState s);
+    LBStatus Enqueue_Task(TaskState s);
     LBStatus Retry_Encode(BoltMessage&);
 
     // state based handlers
-    inline LBStatus Success_None(BoltResult& task);
-    inline LBStatus Success_Hello(BoltResult& task);
-    inline LBStatus Success_Run(BoltResult& task);
-    inline LBStatus Success_Record(BoltResult& task);
-    inline LBStatus Success_Reset(BoltResult& task);
+    LBStatus Success_None(BoltResult& task);
+    LBStatus Success_Hello(BoltResult& task);
+    LBStatus Success_Run(BoltResult& task);
+    LBStatus Success_Record(BoltResult& task);
+    LBStatus Success_Reset(BoltResult& task);
 
-    inline LBStatus Handle_Record(BoltResult& task);
-    inline LBStatus Handle_Failure(BoltResult& task);
-    inline LBStatus Handle_Ignored(BoltResult& task);
+    LBStatus Handle_Record(BoltResult& task);
+    LBStatus Handle_Failure(BoltResult& task);
+    LBStatus Handle_Ignored(BoltResult& task);
 
     void Encode_Pull(const int n);
 

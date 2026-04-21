@@ -3,7 +3,7 @@ A high-speed neo4j C++ driver over bolt protocol
 
 Build (Linux):
 ```
-mkdir bulid && cd build
+mkdir build && cd build
 cmake ..
 make
 ```
@@ -22,25 +22,24 @@ int main()
 	);
 
 	driver.Execute_Async(
-    		"MATCH (n) AS n RETURN n LIMIT 25", 
     		[](BoltResult& res) {
 			for (auto r : res) std::cout << r.ToString() << "\n";
 
             completed.fetch_add(1, std::memory_order_acq_rel);
-		}
+		},
+        "MATCH (n) AS n RETURN n LIMIT 25"
 	);
 
-    // wait for compleletion.
+    // wait for completion.
     while (completed.load(std::memory_order_acquire) < 1)
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
 }
 ```
-Example 2 synchronous query via fetch 
+Example 2 synchronous query via session 
 ```cpp
 #include "neodriver.h"
 #include "bolt_result.h"
 
-static std::atomic<int> completed{ 0 };
 int main()
 {
 	NeoDriver driver(
@@ -48,16 +47,15 @@ int main()
 		Auth::Basic("username", "password")
 	);
 
-    NeoCell* pcell = driver.Get_Session();
-    if (!pcell) Fatal("%s", driver.Get_Last_Error());
+    NeoSession session;
+    LBStatus rc = driver.Get_Session(session);
+    if (!LB_OK(rc)) Fatal("Failed to get session");
 
-	pcell->Execute(
-    		"MATCH (n) AS n RETURN n LIMIT 25"
-	);
+	session.Run("MATCH (n) AS n RETURN n LIMIT 25");
 
-    BoltResult res;     // get's the result stream as an iterator
-    LBStatus rc = pcell->Fetch(res);
-    if (!LB_OK(rc)) Fatal("%s", pcell->Get_Last_Error());
+    BoltResult res;     // gets the result stream as an iterator
+    rc = session.Fetch(res);
+    if (!LB_OK(rc)) Fatal("%s", session.Get_Last_Error());
 
     for (auto r : res) 
         std::cout << r.ToString() << std::endl;
@@ -140,7 +138,7 @@ Example:
 	In which the first byte encodes both the type as string, 0x80 code, and its length, which is 8, followed
 	by the character codes for each string.
 
-Refer to bolt protocol for details, here.
+Refer to bolt protocol for details, [here](https://7687.org/).
 
 ## Philosophy:
 
@@ -260,7 +258,7 @@ the type field definition. The following excerpt from `include/bolt/bolt_value.h
 	}
 ```
 
-the chocie to store offsets instead of direct pointers was because I needed to avoid "dangling pointer" errors that occur during buffer changes 
+the choice to store offsets instead of direct pointers was because I needed to avoid "dangling pointer" errors that occur during buffer changes 
 such as when growing and shrinking (see adaptive buffer). If a buffer grows mid during point decoding, an OS may relocate
 the buffer to a newer address causing the old pointer to dangle, thus no direct pointers.
 Encoding too has its own tricks, since LB wanted to support what I like to call "bolt natural syntax", as the following example:
@@ -376,14 +374,16 @@ which are the main functions used in bolt protocol for executing queries and fet
 
 ### 5. NeoCell
 
+The `NeoCell` is the engine room of LightningBolt. Each cell acts as a self-contained unit that manages a single `NeoConnection`, its own request queue, and high-performance buffers. It bakes in the asynchronous callback model, allowing users to fire off queries and handle results via lambdas without blocking the main execution path. By maintaining its own state and buffers, a cell avoids internal resource contention, making it the primary unit of concurrency in the driver. It also tracks performance metrics via the `LatencyHistogram`, giving you real-time insights into your database performance.
 
 ### 6. NeoPool
 
+Managing a fleet of `NeoCell`s is the job of `NeoPool`. It maintains a collection of cells and provides an `Acquire()` interface to round-robin through them, ensuring balanced load across connections. In a multi-core environment, each core gets its own `NeoPool`, achieving massive throughput by localizing connections and avoiding the "thundering herd" problem. The pool handles the lifecycle of connections—reconnecting on failure and gracefully shutting down when the driver closes.
 
 ### 7. NeoDriver
 
+The `NeoDriver` is the top-level orchestrator. It is designed for multi-core scalability from the ground up. Upon initialization, it creates a `CoreContext` for each CPU core, each with its own `epoll` instance and `NeoPool`. This architecture allows LightningBolt to pin threads to specific cores, maximizing cache locality and minimizing cross-core synchronization overhead. Whether you're running a single query or a massive batch, the driver routes your requests through the most efficient path, making it a true beast on modern server hardware.
 
-### Misc and Helpers
 ### 8. TcpClient
 
 #### Minimal High-Performance TCP / TLS Client
@@ -516,7 +516,7 @@ public:
     int Get_Socket() const;
 
     int Set_NonBlock();
-    void Disconnect();
+    void Discourse();
 
     void Enable_SSL();
 };
@@ -773,7 +773,7 @@ Reset_Read()	    Resets only the read offset to 0
     - SIMD-accelerated decoding pipelines
 
 
-## 🔩 BoltPool - High-Performance Temporary Memory Pool for Bolt Protocol Decoding (still work in progress)
+## 🔩 BoltPool - High-Performance Temporary Memory Pool for Bolt Protocol Decoding
 
 `BoltPool` is a high-speed, zero-allocation-on-fast-path memory pool designed for temporary allocation of Bolt protocol data structures (e.g., `BoltValue`, `List`, `Struct`, `Map`). It provides an efficient two-tiered memory allocation system optimized for minimal memory overhead, maximum locality, and rapid reuse across decoding cycles or queries.
 
@@ -828,13 +828,19 @@ pool.Reset_All();
 
 ### 9. LockFreeQueue
 
-### 10. Latency Histogram measurments
+To achieve maximum speed, LightningBolt employs a high-performance `LockFreeQueue` for inter-component communication. Built as a fixed-size ring buffer using atomic operations and C++11 memory models, it ensures that query dispatch and response handling are non-blocking. By utilizing `std::memory_order_release` and `std::memory_order_acquire`, the queue guarantees safe data visibility between producer and consumer threads without the heavy cost of mutexes or condition variables. This is the backbone that allows `NeoCell` to handle pipelined requests with zero contention.
+
+### 10. Latency Histogram measurements
+
+Performance is nothing without measurement. LightningBolt includes a built-in `LatencyHistogram` to track request-response cycles with microsecond precision. Instead of simple averages, it uses an exponential bucket system (64 buckets representing powers of 2) to capture the full distribution of latencies. This allows for accurate reporting of **p50, p95, and p99** metrics, helping you identify and eliminate tail latency bottlenecks in your graph applications.
 
 ### 11. Error Handling
 LB_Status format 64-bit:
 
+```
 63                                                               0
 +--------+--------+--------+--------+----------------------------+
 | Action | Domain | Stage  | Code   | Aux / Payload               |
 +--------+--------+--------+--------+----------------------------+
  8 bits    8 bits   8 bits   8 bits          32 bits
+ ```

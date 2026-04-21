@@ -12,6 +12,9 @@
  //          INCLUDES
  //===============================================================================|
 #include "connection/neoconnection.h"
+#include "neopool.h"
+#include "utils/red_stats.h"
+
 
 
 
@@ -19,6 +22,15 @@
 //===============================================================================|
 //          ENUM & TYPES
 //===============================================================================|
+enum class QueryMode : u8 
+{
+    Auto,
+    Read,
+    Write
+};
+
+
+
 /**
  * @brief command types and their corresponding parameters understood by the cell.
  *  The structure is meant to capture the layout of different API's offered by
@@ -34,6 +46,8 @@ struct CellCommand
     BoltValue Routes;       // list of routes for route
     BoltValue param = BoltValue::Make_Map();   // params for run, begin, commit and rollback
     BoltValue extra = BoltValue::Make_Map();   // params for run
+    QueryMode mode;
+
     BoltResult result;      // gets the result here
     std::function<void(BoltResult&)> cb;       // callback for async
 
@@ -44,6 +58,8 @@ struct CellCommand
 
 // forwards
 class NeoDriver;
+class NeoPool;
+
 
 //===============================================================================|
 //          CLASS
@@ -55,7 +71,12 @@ class NeoCell
 
 public:
 
-    NeoCell(int epfd_, const std::string& urls, BoltValue* pauth, BoltValue* pextras);
+    NeoCell(int epfd_, 
+		bool ssl_enabled,
+		bool clustered,
+        const std::string& urls, 
+        BoltValue* pauth, 
+        BoltValue* pextras);
     ~NeoCell();
 
     LBStatus Start_Session(const int id = 1);
@@ -65,6 +86,7 @@ public:
         BoltValue&& extra = BoltValue::Make_Map());
     LBStatus Run(const char* query, BoltValue&& param = BoltValue::Make_Map(),
         BoltValue&& extra = BoltValue::Make_Map());
+    LBStatus Execute_Command(CellCommand& cmd);
     LBStatus Fetch(BoltResult& result);
 
     int Get_Socket() const;
@@ -102,12 +124,13 @@ private:
     int max_req_retries;        // total allowed number of retries for a request
     int leftover_bytes;         // leftover bytes from previous decode
     int epfd;                   // epoll descriptor
+	bool is_clustered;		  // is this connection to a cluster?   
 
-	std::atomic<int> last_rc;   // store's the last return value which maybe an error
     std::atomic<s64> resp_ref;  // tracks responses and used to control flow viz wait()...notify_one().
     std::string err_desc;       // a string version of last error occured either from neo4j or internal
 
-    NeoConnection connection;               // a connection instance; either standalone or routed
+    NeoConnection connection;            // pointer to a connection instance; either standalone or routed
+	NeoPool* ppool;                       // pointer to pool for routing and cluster management
     LockFreeQueue<CellCommand> requests;    // queue of requests, allows for retry.
     LatencyHistogram latencies;             // latency measurement structure
    
@@ -118,6 +141,5 @@ private:
     inline bool Can_Retry(int& _count, const int max_count);
 
     LBStatus Poll_Read();
-    LBStatus Execute_Command(CellCommand& cmd);
 	LBStatus Decode_Response(u8* ptr, const size_t bytes);
 };

@@ -310,7 +310,7 @@ LBStatus TcpClient::Recv(void* buf, const int len)
 
 
 /**
- * @brief registers a socket for epoll event in listening.
+ * @brief registers a socket for epoll event for triggering recv ready signals.
  * 
  * @param epfd epoll file descriptor
  * @param pobj pointer to an object containing connection

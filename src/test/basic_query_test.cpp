@@ -47,27 +47,30 @@ std::vector<int64_t> durs;
 void Test_Record_Fetch()
 {
     const size_t iterations = 100;
+    std::string url = "bolt://localhost:7687";
 
     for (size_t i = 0; i < iterations; i++)
     {
-        NeoDriver driver("bolt://localhost:7687",
-            Auth::Basic("neo4j", ""), BoltValue::Make_Map(), 8);
-        NeoCell* pcell = driver.Get_Session();
+        NeoDriver driver(url,
+            Auth::Basic("bolt", ""), BoltValue::Make_Map());
 
-        if (!pcell)
-            Fatal("%s", driver.Get_Last_Error().c_str());
+		NeoSession session;
+        LBStatus rc = driver.Get_Session(session);
+
+        if (!LB_OK(rc))
+            Fatal("%s", "Just no session for now");
         Test test;
-        pcell->Clear_Histo();
+        //session.Clear_Histo();
 
         for (size_t k = 0; k < NUM_TESTS; k++)
         {
             for (u64 j = 0; j < test.rounds[k]; j++)
             {
                 auto start = std::chrono::high_resolution_clock::now();
-                pcell->Run(test.cypher[k]);
+                session.Run(test.cypher[k]);
 
                 BoltResult out;
-                int ret = pcell->Fetch(out);
+                int ret = session.Fetch(out);
 
                 Utils::Print("Fields: %s", out.fields.ToString().c_str());
                 for (auto v : out)
@@ -98,7 +101,7 @@ void Test_Record_Fetch()
 				std::cout << "p95: " << pcell->Percentile(0.95) << " ms\n";
 				std::cout << "p99: " << pcell->Percentile(0.99) << " ms\n";
                 std::cout << "Wall Latency: " << pcell->Avg_Latency() << " ms\n";*/
-				pcell->Clear_Histo();
+				//pcell->Clear_Histo();
             } // end if 
             else
             {
@@ -109,7 +112,7 @@ void Test_Record_Fetch()
             durs.clear();
         } // end tests nested for
 
-        driver.Close();
+        session.Close();
         cout << endl;
     } // end outer for
 } // end Test_Record_Fetch

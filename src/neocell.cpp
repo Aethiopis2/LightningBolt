@@ -15,26 +15,8 @@
 #include <emmintrin.h>
 #include <immintrin.h>
 #include "neocell.h"
+#include "neopool.h"
 
-
-
-
-// SIMD shorthands
-#if defined(__AVX2__)
-#define SIMD_TYPE __m256i
-#define LOADU(x) _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x))
-#define CMPEQ(a,b) _mm256_cmpeq_epi8(a,b)
-#define MOVEMASK(a) _mm256_movemask_epi8(a)
-#define SIMD_WIDTH 32
-#elif defined(__SSE2__)
-#define SIMD_TYPE __m128i
-#define LOADU(x) _mm_loadu_si128(reinterpret_cast<const __m128i*>(x))
-#define CMPEQ(a,b) _mm_cmpeq_epi8(a,b)
-#define MOVEMASK(a) _mm_movemask_epi8(a)
-#define SIMD_WIDTH 16
-#else
-#define SIMD_TYPE char*  // fallback scalar
-#endif
 
 
 
@@ -44,177 +26,6 @@
 constexpr static int MAX_CONNECTION_RETRIES = 12;	// default retry count for connection
 constexpr static int MAX_REQUEST_RETRIES = 3;		// default retry count for request
 
-enum class QueryMode : u8 {
-	Auto,
-	Read,
-	Write
-};
-
-
-// Write keywords
-constexpr std::array<std::string_view, 6> write_keywords = {
-	"CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
-};
-
-
-
-//===============================================================================|
-//          FUNCTIONS
-//===============================================================================|
-/**
- * @brief checks if the query is a write query by looking for the presence of
- *  write keywords in the query string. This is used to determine the routing
- *  strategy for the query when connecting to a cluster.
- *
- * @param query the query string to check
- *
- * @return true if the query is a write query, false otherwise.
- */
-QueryMode Detect_Query_Mode_Scalar(const std::string_view query)
-{
-	bool in_string = false, in_line_comment = false, in_block_comment = false;
-	size_t n = query.size();
-
-	for (int i = 0; i < n; i++)
-	{
-		char c = query[i];
-
-		if (!in_line_comment && !in_block_comment && (c == '\'' || c == '"'))
-		{
-			in_string = !in_string;
-			continue;
-		} // end if string toggle
-
-		if (!in_string && !in_block_comment && i + 1 < n && c == '/' && query[i + 1] == '/')
-		{
-			in_line_comment = true;
-			++i;
-			continue;
-		} // end if line comment
-
-		if (in_line_comment && c == '\n')
-		{
-			in_line_comment = false;
-			continue;
-		} // end if newline
-
-		if (!in_string && !in_line_comment && i + 1 < n && c == '/' && query[i + 1] == '*')
-		{
-			in_block_comment = true;
-			++i;
-			continue;
-		} // end if block comment start
-
-		if (in_block_comment && c == '*' && i + 1 < n && query[i + 1] == '/')
-		{
-			in_block_comment = false;
-			++i;
-			continue;
-		} // end if block comment end
-
-		if (!in_string && !in_line_comment && !in_block_comment)
-		{
-			for (auto kw : write_keywords)
-			{
-				size_t kw_len = kw.size();
-				if (i + kw_len > n) continue;
-				bool match = true;
-				for (size_t j = 0; j < kw_len; ++j)
-				{
-					if (std::tolower(query[i + j]) != kw[j])
-					{
-						match = false;
-						break;
-					} // end if char mismatch
-				} // end for kw chars
-
-				if (match) return QueryMode::Write;
-			} // end nested if
-		} // end if not in string or comment
-	} // end for
-
-	return QueryMode::Read;
-} // end Is_Write_Query
-
-
-#if defined(__SSE2__) || defined(__AVX2__)
-QueryMode Detect_Query_Mode_SIMD(std::string_view query)
-{
-	bool in_string = false, in_line_comment = false, in_block_comment = false;
-	size_t n = query.size();
-
-	for (size_t i = 0; i < n; ++i)
-	{
-		char c = query[i];
-
-		if (!in_line_comment && !in_block_comment && (c == '\'' || c == '"'))
-		{
-			in_string = !in_string;
-			continue;
-		} // end if comment
-
-		if (!in_string && !in_block_comment && i + 1 < n && c == '/' && query[i + 1] == '/')
-		{
-			in_line_comment = true; ++i; continue;
-		} // end if string
-
-		if (in_line_comment && c == '\n')
-		{
-			in_line_comment = false;
-			continue;
-		} // end if line comment
-
-		if (!in_string && !in_line_comment && i + 1 < n && c == '/' && query[i + 1] == '*')
-		{
-			in_block_comment = true; ++i; continue;
-		} // end if
-
-		if (in_block_comment && c == '*' && i + 1 < n && query[i + 1] == '/')
-		{
-			in_block_comment = false; ++i; continue;
-		} // end if
-
-		if (!in_string && !in_line_comment && !in_block_comment)
-		{
-			for (auto kw : write_keywords)
-			{
-				size_t kw_len = kw.size();
-				if (kw_len > SIMD_WIDTH || i + kw_len > n) continue;
-
-				alignas(SIMD_WIDTH) char buf[SIMD_WIDTH] = {};
-				for (size_t j = 0; j < kw_len; ++j) buf[j] = std::tolower(query[i + j]);
-
-				SIMD_TYPE q_vec = LOADU(buf);
-
-				alignas(SIMD_WIDTH) char kw_buf[SIMD_WIDTH] = {};
-				for (size_t j = 0; j < kw_len; ++j) kw_buf[j] = kw[j];
-
-				SIMD_TYPE kw_vec = LOADU(kw_buf);
-				SIMD_TYPE cmp = CMPEQ(q_vec, kw_vec);
-				int mask = MOVEMASK(cmp);
-
-				if ((mask & ((1 << kw_len) - 1)) == ((1 << kw_len) - 1))
-					return QueryMode::Write;
-			} // end for nested
-		} // end if
-	} // end for
-
-	return QueryMode::Read;
-} // end Detect_Query_Mode_SIMD
-#endif
-
-
-// --------------------
-// Unified wrapper
-// --------------------
-QueryMode Detect_Query_Mode(std::string_view query)
-{
-#if defined(__AVX2__) || defined(__SSE2__)
-	return Detect_Query_Mode_SIMD(query);
-#else
-	return Detect_Query_Mode_Scalar(query);
-#endif
-} // end Detect_Query_Mode
 
 
 
@@ -227,8 +38,10 @@ QueryMode Detect_Query_Mode(std::string_view query)
  *
  * @param con_string the connection string to connect to neo4j server
  */
-NeoCell::NeoCell(int epfd_, const std::string& urls, BoltValue* pauth, BoltValue* pextras)
-	: connection(urls, pauth, pextras), epfd(epfd_), max_connection_retries(MAX_CONNECTION_RETRIES),
+NeoCell::NeoCell(int epfd_, bool ssl_enabled, bool clustered,
+	const std::string& urls, BoltValue* pauth, BoltValue* pextras)
+	: connection(ssl_enabled, urls, pauth, pextras), epfd(epfd_),
+	  max_connection_retries(MAX_CONNECTION_RETRIES),
 	  max_req_retries(MAX_REQUEST_RETRIES), resp_ref(0)
 {
 	connection_retry_count = 0;
@@ -258,24 +71,24 @@ NeoCell::~NeoCell()
 LBStatus NeoCell::Start_Session(const int id)
 {
 	// trivially reject false calls
-	if (connection.is_open) return LB_Make();
+	if (connection.Is_Open()) return LB_Make();
 
 	// push result queue
 	if (!requests.Enqueue({}))
 	{
-		return LB_Handle_Status(LB_Make
+		return LB_Make
 		(
 			LBAction::LB_FAIL,
 			LBDomain::LB_DOM_DRIVER,
 			LBCode::LB_CODE_TASKSTATE
-		), this);
+		);
 	} // end if queue not avail
 
 	LBStatus rc = connection.Handshake(epfd, this, id);
 	if (!LB_OK(rc))
 	{
 		requests.Dequeue();
-		return LB_Handle_Status(rc, this);
+		return rc;
 	} // end if no handshake
 
 	Add_Ref();
@@ -288,7 +101,7 @@ LBStatus NeoCell::Start_Session(const int id)
 	if (!LB_OK(rc))
 	{
 		requests.Dequeue();
-		return LB_Handle_Status(rc, this);
+		return rc;
 	} // end if no hello
 
 	if (Should_Wait())
@@ -301,7 +114,7 @@ LBStatus NeoCell::Start_Session(const int id)
 		{
 			if (res->result.error)
 			{
-				err_desc = res->result.begin().bv.ToString();
+				err_desc = res->result.error_msg;
 				rc = LB_Make
 				(
 					LBAction::LB_FAIL,
@@ -850,13 +663,21 @@ LBStatus NeoCell::Decode_Response(u8* ptr, const size_t bytes)
 		else if (action == LBAction::LB_RETRY)
 		{
 			connection.read_buf.Consume(decoded);
-			connection.read_buf.Adaptive_Tick(decoded);  // EMA based growth/shrink
+
+			size_t start_offset = (!connection.tasks.Is_Empty() ?
+				connection.tasks.Front()->get().view.cursor - connection.read_buf.Data() : 0);
+
+			connection.read_buf.Adaptive_Tick(decoded, start_offset);  // EMA based growth/shrink
 			return LB_Handle_Status(rc, this);
 		} // end else if retry
 	} // end while
 
 	// update the buffer pos, stats and all with what's actually decoded
 	connection.read_buf.Consume(decoded);
-	connection.read_buf.Adaptive_Tick(decoded);  // EMA based growth/shrink
+
+	size_t start_offset = (!connection.tasks.Is_Empty() && connection.tasks.Front()->get().view.cursor ?
+		connection.tasks.Front()->get().view.cursor - connection.read_buf.Data() : 0);
+
+	connection.read_buf.Adaptive_Tick(decoded, start_offset);  // EMA based growth/shrink
 	return rc; // LBOK_INFO(decoded);
 } // end Decode_Response

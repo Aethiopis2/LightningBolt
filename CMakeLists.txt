@@ -25,7 +25,7 @@ add_library(driver SHARED
     src/utils/errors.cpp
     src/neodriver.cpp
     src/neopool.cpp 
-    src/neoerr.cpp)
+    src/neoerr.cpp "include/neorouter.h" "include/neosession.h")
 
 find_package(OpenSSL REQUIRED)
 target_include_directories(driver PUBLIC include ${OPENSSL_INCLUDE_DIR})
@@ -34,7 +34,7 @@ target_link_libraries(driver PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
 # Tests
 foreach(test IN ITEMS encoder_decoder_test streaming_batch_test connection_test basic_query_test async_qbenchmark_test percentile_test driver_test)
-    add_executable(${test} src/test/${test}.cpp)
+    add_executable(${test} src/test/${test}.cpp "include/neorouter.h" "include/neosession.h")
     target_link_libraries(${test} driver)
     set_target_properties(${test} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endforeach()

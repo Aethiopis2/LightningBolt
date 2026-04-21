@@ -1,4 +1,4 @@
-/**
+﻿/**
   @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
  *
  * @version 1.0
@@ -10,10 +10,214 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
+#include <emmintrin.h>
+#include <immintrin.h>
 #include <sys/eventfd.h>
 #include "neodriver.h"
 
 
+
+
+// SIMD shorthands
+#if defined(__AVX2__)
+#define SIMD_TYPE __m256i
+#define LOADU(x) _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x))
+#define CMPEQ(a,b) _mm256_cmpeq_epi8(a,b)
+#define MOVEMASK(a) _mm256_movemask_epi8(a)
+#define SIMD_WIDTH 32
+#elif defined(__SSE2__)
+#define SIMD_TYPE __m128i
+#define LOADU(x) _mm_loadu_si128(reinterpret_cast<const __m128i*>(x))
+#define CMPEQ(a,b) _mm_cmpeq_epi8(a,b)
+#define MOVEMASK(a) _mm_movemask_epi8(a)
+#define SIMD_WIDTH 16
+#else
+#define SIMD_TYPE char*  // fallback scalar
+#endif
+
+
+
+//===============================================================================|
+//          KONSTANTS
+//===============================================================================|
+// Write keywords
+constexpr std::array<std::string_view, 6> write_keywords = {
+	"CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
+};
+
+
+
+//===============================================================================|
+//          FUNCTIONS
+//===============================================================================|
+/**
+ * @brief checks if the query is a write query by looking for the presence of
+ *  write keywords in the query string. This is used to determine the routing
+ *  strategy for the query when connecting to a cluster.
+ *
+ * @param query the query string to check
+ *
+ * @return true if the query is a write query, false otherwise.
+ */
+QueryMode Detect_Query_Mode_Scalar(const std::string_view query)
+{
+	bool in_string = false, in_line_comment = false, in_block_comment = false;
+	size_t n = query.size();
+
+	for (int i = 0; i < n; i++)
+	{
+		char c = query[i];
+
+		if (!in_line_comment && !in_block_comment && (c == '\'' || c == '"'))
+		{
+			in_string = !in_string;
+			continue;
+		} // end if string toggle
+
+		if (!in_string && !in_block_comment && i + 1 < n && c == '/' && query[i + 1] == '/')
+		{
+			in_line_comment = true;
+			++i;
+			continue;
+		} // end if line comment
+
+		if (in_line_comment && c == '\n')
+		{
+			in_line_comment = false;
+			continue;
+		} // end if newline
+
+		if (!in_string && !in_line_comment && i + 1 < n && c == '/' && query[i + 1] == '*')
+		{
+			in_block_comment = true;
+			++i;
+			continue;
+		} // end if block comment start
+
+		if (in_block_comment && c == '*' && i + 1 < n && query[i + 1] == '/')
+		{
+			in_block_comment = false;
+			++i;
+			continue;
+		} // end if block comment end
+
+		if (!in_string && !in_line_comment && !in_block_comment)
+		{
+			for (auto kw : write_keywords)
+			{
+				size_t kw_len = kw.size();
+				if (i + kw_len > n) continue;
+				bool match = true;
+				for (size_t j = 0; j < kw_len; ++j)
+				{
+					if (std::tolower(query[i + j]) != kw[j])
+					{
+						match = false;
+						break;
+					} // end if char mismatch
+				} // end for kw chars
+
+				if (match) return QueryMode::Write;
+			} // end nested if
+		} // end if not in string or comment
+	} // end for
+
+	return QueryMode::Read;
+} // end Is_Write_Query
+
+
+#if defined(__SSE2__) || defined(__AVX2__)
+QueryMode Detect_Query_Mode_SIMD(std::string_view query)
+{
+	bool in_string = false, in_line_comment = false, in_block_comment = false;
+	size_t n = query.size();
+
+	for (size_t i = 0; i < n; ++i)
+	{
+		char c = query[i];
+
+		if (!in_line_comment && !in_block_comment && (c == '\'' || c == '"'))
+		{
+			in_string = !in_string;
+			continue;
+		} // end if comment
+
+		if (!in_string && !in_block_comment && i + 1 < n && c == '/' && query[i + 1] == '/')
+		{
+			in_line_comment = true; ++i; continue;
+		} // end if string
+
+		if (in_line_comment && c == '\n')
+		{
+			in_line_comment = false;
+			continue;
+		} // end if line comment
+
+		if (!in_string && !in_line_comment && i + 1 < n && c == '/' && query[i + 1] == '*')
+		{
+			in_block_comment = true; ++i; continue;
+		} // end if
+
+		if (in_block_comment && c == '*' && i + 1 < n && query[i + 1] == '/')
+		{
+			in_block_comment = false; ++i; continue;
+		} // end if
+
+		if (!in_string && !in_line_comment && !in_block_comment)
+		{
+			for (auto kw : write_keywords)
+			{
+				size_t kw_len = kw.size();
+				if (kw_len > SIMD_WIDTH || i + kw_len > n) continue;
+
+				alignas(SIMD_WIDTH) char buf[SIMD_WIDTH] = {};
+				for (size_t j = 0; j < kw_len; ++j) buf[j] = std::tolower(query[i + j]);
+
+				SIMD_TYPE q_vec = LOADU(buf);
+
+				alignas(SIMD_WIDTH) char kw_buf[SIMD_WIDTH] = {};
+				for (size_t j = 0; j < kw_len; ++j) kw_buf[j] = kw[j];
+
+				SIMD_TYPE kw_vec = LOADU(kw_buf);
+				SIMD_TYPE cmp = CMPEQ(q_vec, kw_vec);
+				int mask = MOVEMASK(cmp);
+
+				if ((mask & ((1 << kw_len) - 1)) == ((1 << kw_len) - 1))
+					return QueryMode::Write;
+			} // end for nested
+		} // end if
+	} // end for
+
+	return QueryMode::Read;
+} // end Detect_Query_Mode_SIMD
+#endif
+
+
+// --------------------
+// Unified wrapper
+// --------------------
+QueryMode Detect_Query_Mode(std::string_view query)
+{
+#if defined(__AVX2__) || defined(__SSE2__)
+	return Detect_Query_Mode_SIMD(query);
+#else
+	return Detect_Query_Mode_Scalar(query);
+#endif
+} // end Detect_Query_Mode
+
+
+/**
+ * @brief associates a given thread to a specific core
+ */
+void PinThreadToCore(int core_id)
+{
+	cpu_set_t cpuset;
+	CPU_ZERO(&cpuset);
+	CPU_SET(core_id, &cpuset);
+
+	pthread_t current_thread = pthread_self();
+	pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+} // end PinThreadToCore
 
 
 //===============================================================================|
@@ -22,10 +226,8 @@
 /**
  * @brief constructor
  */
-NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
-	const int pool_size_)
-	: _urls(urls), _auth(std::move(auth)), pool(nullptr),
-	pool_size(pool_size_ <= 0 ? POOL_SIZE : pool_size_)
+NeoDriver::NeoDriver(std::string& urls, BoltValue auth, BoltValue extras, int cores)
+	: _auth(std::move(auth))
 {
 	next_client_id = 0;
 	_extras = BoltValue::Make_Map();
@@ -39,17 +241,56 @@ NeoDriver::NeoDriver(const std::string& urls, BoltValue auth, BoltValue extras,
 		_extras.Insert_Map(key, *bv);
 	} // end for copy
 
-	// create epoll instance for polling
-	int n = std::thread::hardware_concurrency();
-	epfds.resize(n);
-	poll_threads.resize(n);
-
-	looping.store(true, std::memory_order_release);
-	for (int i = 0; i < n; i++)
+	// check url info and set ssl if needed
+	size_t pos = urls.find_first_of(URL_SEPARATOR);
+	if (pos != std::string::npos)
 	{
-		epfds[i] = epoll_create1(0);	// no flags, no checks
-		poll_threads[i] = std::thread(&NeoDriver::Poll_Read, this, epfds[i]);
-		pool = new NeoCellPool(epfds[i], pool_size, _urls, &_auth, &_extras);
+		if (!urls.substr(0, pos).compare(BOLT_NORMAL))
+		{
+			ssl_on = false;
+			clustred = false;
+		} // end else if no ssl on single
+		else if (!urls.substr(0, pos).compare(BOLT_SSL))
+		{
+			ssl_on = true;
+			clustred = false;
+		} // end if ssl on single
+		else if (!urls.substr(0, pos).compare(NEO4J_NORMAL))
+		{
+			ssl_on = false;
+			clustred = true;
+		} // end if ssl on single
+		else if (!urls.substr(0, pos).compare(NEO4J_SSL))
+		{
+			ssl_on = false;
+			clustred = true;
+		} // end else if ssl on cluster
+
+		_urls = urls.substr(pos + 3, urls.length() - (pos + 3));
+	} // end if pos
+
+	// create contexts and their corresponding pools and routers
+	_cores.reserve(cores);
+	for (int i = 0; i < cores; i++)
+	{
+		int efd = epoll_create1(0);
+		NeoPool pool(efd, ssl_on, clustred, i, POOL_SIZE, _urls, &_auth, &_extras);
+		NeoRouter route(pool);
+
+		CoreContext ctx
+		(
+			i, 
+			efd, 
+			eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC),
+			std::move(pool)
+		);
+
+		_cores.push_back(std::move(ctx));
+		auto& c = _cores[i];
+		c.poll_thread = std::thread([this, &c]() {
+			PinThreadToCore(c.core_id);
+			Poll_Loop(c);
+		});
 	} // end for
 } // end constructor
 
@@ -65,10 +306,6 @@ NeoDriver::~NeoDriver()
 		_auth.pool->Get_Last_Offset() : _extras.pool->Get_Last_Offset();
 	Release_Pool<BoltValue>(last_offset);
 	Close();
-
-	// kill pool pointer
-	delete pool;
-	pool = nullptr;
 } // end destructor
 
 
@@ -88,30 +325,17 @@ LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb,
 	const char* query, 
 	BoltValue&& params, BoltValue&& extra)
 {
-	NeoCell* pcell = pool->Acquire();
-	if (!pcell) return LB_Make
-	(
-		LBAction::LB_FAIL,
-		LBDomain::LB_DOM_DRIVER
-	);
+	CellCommand cmd;
+	cmd.type = CellCmdType::Run;
+	cmd.cypher = query;
+	cmd.param = std::move(params);
+	cmd.extra = std::move(extra);
+	cmd.cb = cb;
+	cmd.mode = Detect_Query_Mode(query);
 
-	LBStatus rc = pcell->Start_Session(++next_client_id);
-	if (!LB_OK(rc))
-	{
-		last_err = pcell->err_desc;
-		return rc;
-	} // end if no session
-
-	rc = pcell->Run_Async
-	(
-		cb, 
-		query, 
-		std::move(params), 
-		std::move(extra)
-	);
-	if (!LB_OK(rc))
-		last_err = pcell->err_desc;
-	return rc;
+	// core-local dispatch (no contention)
+	CoreContext& ctx = _cores[Next_Core()];
+	return ctx.router.Execute(cmd);
 } // end Execute_Async
 
 
@@ -134,88 +358,76 @@ LBStatus NeoDriver::Execute(const char* query, BoltValue&& params,
 } // end Execute
 
 
+/**
+ * @brief acquires a session from the pool and returns it to the caller. The session
+ *	handle is used for subsequent operations like Run, Fetch, Begin, Commit, Rollback etc.
+ * 
+ * @param handle the session handle to populate and return to the caller.
+ * 
+ * @return LB_OK on success, LB_FAIL on failure.
+ */
+LBStatus NeoDriver::Get_Session(NeoSession& handle)
+{
+	CoreContext& ctx = _cores[Next_Core()];
+	NeoCell* pcell = ctx.pool.Acquire();
+	if (!pcell)
+	{
+		return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER);
+	} // end if no cell
+
+	LBStatus rc = pcell->Start_Session(++next_client_id);
+	if (!LB_OK(rc))
+	{
+		//last_err = pcell->Get_Last_Error();
+		return rc;
+	} // end if failed to start session
+
+	handle.pcell = pcell;
+	handle.pdriver = this;
+
+	return LB_Make();
+} // end Get_Session
+
+
 void NeoDriver::Close()
 {
 	u64 my_exit = 1;
-	exit_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 
-	struct epoll_event ev {};
-	ev.events = EPOLLIN;
-	ev.data.fd = exit_fd;
-
-	pool->Stop();
-	for (int i = 0; i < epfds.size(); i++)
+	for (auto& ctx : _cores)
 	{
-		epoll_ctl(epfds[i], EPOLL_CTL_ADD, exit_fd, &ev);
-		write(exit_fd, &my_exit, sizeof(my_exit));
-		if (poll_threads[i].joinable()) poll_threads[i].join();
-		CLOSE(epfds[i]);
-	} // end if 
+		ctx.pool.Close();
+		write(ctx.exit_fd, &my_exit, sizeof(my_exit));
+		if (ctx.poll_thread.joinable()) ctx.poll_thread.join();
 
-	CLOSE(exit_fd);
+		CLOSE(ctx.epfd);
+		CLOSE(ctx.exit_fd);
+	} // end for
 } // end Close
 
 
-void NeoDriver::Set_Pool_Size(const int nsize)
+inline size_t NeoDriver::Next_Core()
 {
-	pool_size = nsize;
-} // end Set_Pool_Size
+	return rr_core.fetch_add(1, std::memory_order_relaxed) % _cores.size();
+} // end Next_Core
 
 
-int NeoDriver::Get_Pool_Size() const
+void NeoDriver::Poll_Loop(CoreContext& ctx)
 {
-	return pool_size;
-} // end Get_Pool_Size
+	epoll_event events[MAX_EVENTS];
 
-
-std::string NeoDriver::Get_Last_Error() const
-{
-	return last_err;
-} // end Get_Last_Error
-
-
-NeoCell* NeoDriver::Get_Session()
-{
-	NeoCell* pcell = pool->Acquire();
-	last_rc = pcell->Start_Session(++next_client_id);
-
-	if (!LB_OK(last_rc))
+	while (ctx.running.load(std::memory_order_acquire))
 	{
-		last_err = pcell->Get_Last_Error();
-		return nullptr;
-	} // end if Get_Session
-
-	return pcell;
-} // end pcell
-
-
-NeoCellPool* NeoDriver::Get_Pool()
-{
-	for (int i = 0; i < pool->Workers().size(); i++)
-	{
-		auto* p = pool->Acquire();
-		p->Start_Session(next_client_id++);
-	}
-		
-	return pool;
-} // end Get_Pool
-
-
-void NeoDriver::Poll_Read(int epfd)
-{
-	while (looping.load(std::memory_order_acquire))
-	{
-		int nfds = epoll_wait(epfd, events, MAX_EVENTS, 1000); // 1 second timeout
+		int nfds = epoll_wait(ctx.epfd, events, MAX_EVENTS, 1000); // 1 second timeout
 		for (int n = 0; n < nfds; ++n)
 		{
 			NeoCell* pcell = static_cast<NeoCell*>(events[n].data.ptr);
 			if (events[n].events & EPOLLIN)
 			{
-				if (events[n].data.fd == exit_fd)
+				if (events[n].data.fd == ctx.exit_fd)
 				{
 					uint64_t val;
-					read(exit_fd, &val, sizeof(val)); // clear it
-					looping.store(false, std::memory_order_relaxed);
+					read(ctx.exit_fd, &val, sizeof(val)); // clear it
+					ctx.running.store(false, std::memory_order_relaxed);
 					break;
 				}
 
@@ -236,8 +448,8 @@ void NeoDriver::Poll_Read(int epfd)
 
 					// now begin decoding, if we have a full message
 					rc = pcell->Decode_Response(pcell->Get_Read_Buffer_Read_Ptr(), LB_Aux(rc));
-					/*if (pcell->tasks.Is_Empty() && pcell->requests.Is_Empty())
-						pcell->Reset_Read_Buffer();*/
+					if (pcell->requests.Is_Empty())
+						pcell->Reset_Read_Buffer();
 				} // end while
 			} // end if readable
 		} // end for nfds

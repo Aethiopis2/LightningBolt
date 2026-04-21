@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 14th of May 2025, Wednesday.
- * @date updated 20th of March 2026, Friday.
+ * @date updated 20th of April 2026, Monday.
  */
 #pragma once
 
@@ -11,7 +11,6 @@
  //===============================================================================|
  //          INCLUDES
  //===============================================================================|
-#include <cmath>
 #include "connection/neoconnection.h"
 #include "bolt/bolt_result.h"
 
@@ -72,9 +71,9 @@ enum class CellCmdType
  */
 struct BoltView
 {
-    u8* cursor;                 // the current address
-    u64 offset;                 // the cursor offset
-    size_t size;                // the size of view into buffer
+    u8* cursor = nullptr;   // the current address
+    u64 offset = 0;         // the cursor offset
+    size_t size = 0;        // the size of view into buffer
 };
 
 

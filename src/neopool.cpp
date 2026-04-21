@@ -28,73 +28,54 @@
 /**
  * @brief constructor
  */
-NeoCellPool::NeoCellPool(int epfd, size_t nworkers, std::string& urls, BoltValue* pauth,
+NeoPool::NeoPool
+(
+	int epfd_,
+	bool ssl,
+	bool clustered,
+	int id,
+	size_t ncells, 
+	std::string& urls, 
+	BoltValue* pauth, 
 	BoltValue* pextras)
+	: epfd(epfd_), core_id(id)
 {
-	for (size_t i = 0; i < nworkers; ++i)
-		workers.emplace_back(new NeoCell(epfd, urls, pauth, pextras));
+	cells.reserve(ncells);
+	for (size_t i = 0; i < ncells; ++i)
+	{
+		cells.emplace_back(new NeoCell(epfd, ssl, clustered,
+			urls, pauth, pextras));
+	} // end for
 } // end constructor
 
 
 /**
- * @brief the function either starts single connection which is the next inline for
- *	processing the next request or starts all connections for an egar style 
- *	connection depending on the value of the parameter passed
- * 
- * @param all_connections a boolean that when set true all connections should start
- * 
- * @return 0 on success or -ve number indicating error
+ * @brief returns the next cell in the pool based on the acquire function pointer 
+ *	function address set by the constructor.
  */
-LBStatus NeoCellPool::Start(const bool all_connections)
+NeoCell* NeoPool::Acquire()
 {
-	LBStatus rc;		// return value from functions
-
-	if (!all_connections)
-	{
-		// start the next connection on the pool if not already
-		//	running
-		int idx = idx_counter.load(std::memory_order_acquire) % workers.size();
-		rc = workers[idx].get()->Start_Session(idx);
-	} // end if start a single connection only
-	else
-	{
-		int id = 1;
-		for (auto& w : workers)
-		{
-			rc = w->Start_Session(id++);
-			if (!LB_OK(rc))
-				return rc;
-		} // end foreach workers
-	} // end else start everything
-
-	return rc;
-} // end Start
-
-
-/**
- * @brief stops all workers in the pool
- */
-void NeoCellPool::Stop()
-{
-	for (auto& w : workers)
-		w->Stop();
-} // end Stop
-
-
-/**
- * @brief gets a worker from the pool in a round-robin fashion
- */
-NeoCell* NeoCellPool::Acquire()
-{
-	int idx = idx_counter.fetch_add(1, std::memory_order_relaxed) % workers.size();
-	return workers[idx].get();
+	size_t idx = rr.fetch_add(1, std::memory_order_relaxed);
+	return cells[idx % cells.size()].get();
 } // end Acquire
 
 
 /**
- * @brief gets the list of all workers
+ * @brief gets the list of all cells
  */
-const std::vector<std::unique_ptr<NeoCell>>& NeoCellPool::Workers() const
+inline const std::vector<std::unique_ptr<NeoCell>>& NeoPool::Cells() const
 {
-	return workers;
-} // end Workers
+	return cells;
+} // end cells
+
+
+/**
+ * @brief closes all cells in the pool by invoking their Stop() method.
+ */
+void NeoPool::Close()
+{
+	for (auto& cell : cells)
+	{
+		cell->Stop();
+	} // end for
+} // end Close

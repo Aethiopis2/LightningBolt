@@ -41,7 +41,7 @@ void FetchCallbackFn(BoltResult& res)
         return;
 	} // end if error
 
-      for (auto v : res);
+    for (auto v : res);
         //Utils::Print("Records: %s", v.ToString().c_str());
     /*std::cout << res.summary.ToString() << "\n";
     std::cout << "=======================\n"; */
@@ -54,11 +54,11 @@ void FetchCallbackFn(BoltResult& res)
 
 int main()
 {
-    constexpr int QUERY_COUNT = 1;
+    constexpr int QUERY_COUNT = 1000;
     std::string url = "bolt://localhost:7687";
     BoltValue basic = Auth::Basic("neo4j", "");
 
-    NeoDriver driver(url, basic, BoltValue::Make_Map(), 1);
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 8);
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) 
@@ -71,12 +71,12 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     auto end = std::chrono::high_resolution_clock::now();
-    driver.Close();
-
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     std::cout << "Queries: " << QUERY_COUNT << "\n";
     std::cout << "Records: " << records.load() << "\n";
     std::cout << "Time(ms): " << ms << "\n";
     std::cout << "QPS: " << (QUERY_COUNT * 1000.0 / ms) << "\n";
+
+    driver.Close();
 }
