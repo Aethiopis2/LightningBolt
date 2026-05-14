@@ -21,7 +21,7 @@
 //===============================================================================|
 //          TYPES & ENUMS
 //===============================================================================|
-class NeoCell;
+class NeoConnection;
 
 /**
  * LB uses a 64-bit packed error codes to determine source of errors and apply 
@@ -173,7 +173,7 @@ constexpr LBStatus LBOK_INFO(u32 aux)
 } // end LB_OK_INFO
 
 
-LBStatus LB_Handle_Status(LBStatus status, NeoCell* pcell);
+LBStatus LB_Handle_Status(LBStatus status, NeoConnection* pcell);
 std::string LB_Error_String(LBStatus status);
 
 

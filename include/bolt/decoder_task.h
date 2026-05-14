@@ -49,9 +49,9 @@ constexpr int QUERY_STATES = 15;
 
 
 /**
- * @brief command types for my cellular model
+ * @brief command types for connection object
  */
-enum class CellCmdType
+enum class ConnectionCmdType
 {
     Run,
     Begin,
@@ -59,8 +59,49 @@ enum class CellCmdType
     Rollback,
     Pull,
     Discard,
+	Route,
     Reset,
     Logoff,
+};
+
+
+
+enum class QueryMode : u8
+{
+    Auto,
+    Read,
+    Write
+};
+
+
+/**
+ * @brief command types and their corresponding parameters understood by the connection.
+ *  The structure is meant to capture the layout of different API's offered by
+ *  the connection object.
+ */
+struct ConnectionCommand
+{
+    ConnectionCmdType type;       // the command types, see enum above
+
+    const char* cypher;     // the query string in relation to run command
+    int n = -1;             // size for fetching
+
+    BoltValue routes;       // list of routes for route
+    BoltValue param = BoltValue::Make_Map();   // params for run, begin, commit and rollback
+    BoltValue extra = BoltValue::Make_Map();   // params for run
+	BoltValue bookmark = BoltValue::Make_List();  // list of bookmarks for begin trx
+	std::string database;   // database name for begin trx
+    QueryMode mode;
+
+    BoltResult result;      // gets the result here
+    std::function<void(BoltResult&)> cb;       // callback for async
+
+    // constructors
+    ConnectionCommand() = default;
+    ConnectionCommand(ConnectionCmdType tp) : type(tp) {}
+	ConnectionCommand(ConnectionCmdType tp, const char* c, int nfetch = -1, 
+        BoltValue _param = BoltValue::Make_Map(), BoltValue _extra = BoltValue::Make_Map()) :
+        type(tp), cypher(c), n(nfetch), param(std::move(param)), extra(std::move(_extra)) {}
 };
 
 
@@ -71,7 +112,7 @@ enum class CellCmdType
  */
 struct BoltView
 {
-    u8* cursor = nullptr;   // the current address
+	s64 start = -1;          // the start of the view into the buffer
     u64 offset = 0;         // the cursor offset
     size_t size = 0;        // the size of view into buffer
 };
@@ -86,9 +127,12 @@ struct DecoderTask
 {
     TaskState state;        // current state of the query
     BoltView view;          // view into the buffer for this query
+    ConnectionCommand cmd;  // connection command for requests
+	BoltResult result;      // decoded result for this query
 
     DecoderTask() = default;
     DecoderTask(TaskState s) : state(s) { }
+    DecoderTask(TaskState s, ConnectionCommand&& command) : state(s), cmd(std::move(command)) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

@@ -39,7 +39,7 @@ public:
     int exit_fd;
 
     NeoPool pool;
-    NeoRouter router;
+    NeoSession session;
 
     std::thread poll_thread;
     std::atomic<bool> running{ true };
@@ -51,7 +51,7 @@ public:
 		int exit_fd_,
         NeoPool&& pool_
     ) : core_id(id), epfd(epfd_), exit_fd(exit_fd_), 
-        pool(std::move(pool_)), router(pool)
+		pool(std::move(pool_)), session(pool)
     {
         struct epoll_event ev {};
         ev.events = EPOLLIN;
@@ -65,7 +65,7 @@ public:
 
     CoreContext(CoreContext&& other) noexcept
         : core_id(other.core_id), epfd(other.epfd), exit_fd(other.exit_fd),
-          pool(std::move(other.pool)), router(pool),
+          pool(std::move(other.pool)), session(pool),
           poll_thread(std::move(other.poll_thread)), running(other.running.load())
     {
 	} // end move constructor
@@ -78,7 +78,7 @@ public:
             epfd = other.epfd;
             exit_fd = other.exit_fd;
             pool = std::move(other.pool);
-            router = std::move(other.router);
+            session = NeoSession(pool);
             poll_thread = std::move(other.poll_thread);
             running.store(other.running.load());
         }
@@ -94,7 +94,7 @@ class NeoDriver
 {
 public:
 
-    NeoDriver(std::string& urls, BoltValue auth,
+    NeoDriver(std::string urls, BoltValue auth,
         BoltValue extra = BoltValue::Make_Map(),
         const int pool_size_ = POOL_SIZE);
     ~NeoDriver();

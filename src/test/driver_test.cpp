@@ -26,13 +26,13 @@ static std::atomic<int> records{ 0 };
 int main()
 {
     // 1. start driver
-	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", ""));
+	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", "tobby@melona"));
     
 	BoltResult result;
     driver.Execute_Async(
-        [&driver](BoltResult& result)
+        [](BoltResult& result)
         {
-            if (result.error) Fatal("%s", driver.Get_Last_Error().c_str());
+            //if (result.error) Fatal("%s", driver.Get_Last_Error().c_str());
 
             Utils::Print("Meta: %s", result.fields.ToString().c_str());
             Utils::Print("Records:");

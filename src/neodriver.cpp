@@ -226,7 +226,7 @@ void PinThreadToCore(int core_id)
 /**
  * @brief constructor
  */
-NeoDriver::NeoDriver(std::string& urls, BoltValue auth, BoltValue extras, int cores)
+NeoDriver::NeoDriver(std::string urls, BoltValue auth, BoltValue extras, int cores)
 	: _auth(std::move(auth))
 {
 	next_client_id = 0;
@@ -275,7 +275,6 @@ NeoDriver::NeoDriver(std::string& urls, BoltValue auth, BoltValue extras, int co
 	{
 		int efd = epoll_create1(0);
 		NeoPool pool(efd, ssl_on, clustred, i, POOL_SIZE, _urls, &_auth, &_extras);
-		NeoRouter route(pool);
 
 		CoreContext ctx
 		(
@@ -323,19 +322,27 @@ NeoDriver::~NeoDriver()
  */
 LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb, 
 	const char* query, 
-	BoltValue&& params, BoltValue&& extra)
+	BoltValue&& params, 
+	BoltValue&& extra)
 {
-	CellCommand cmd;
-	cmd.type = CellCmdType::Run;
+	/*ConnectionCommand cmd;
+	cmd.type = ConnectionCmdType::Run;
 	cmd.cypher = query;
 	cmd.param = std::move(params);
 	cmd.extra = std::move(extra);
 	cmd.cb = cb;
-	cmd.mode = Detect_Query_Mode(query);
+	cmd.mode = Detect_Query_Mode(query);*/
 
 	// core-local dispatch (no contention)
 	CoreContext& ctx = _cores[Next_Core()];
-	return ctx.router.Execute(cmd);
+	LBStatus rc = ctx.session.Start_Session(ctx.epfd, ++next_client_id);
+	if (!LB_OK(rc))
+	{
+		//last_err = pcell->Get_Last_Error();
+		return rc;
+	} // end if failed to start session
+
+	return ctx.session.Run_Async(cb, query, std::move(params), std::move(extra));
 } // end Execute_Async
 
 
@@ -369,24 +376,25 @@ LBStatus NeoDriver::Execute(const char* query, BoltValue&& params,
 LBStatus NeoDriver::Get_Session(NeoSession& handle)
 {
 	CoreContext& ctx = _cores[Next_Core()];
-	NeoCell* pcell = ctx.pool.Acquire();
-	if (!pcell)
+	NeoConnection* pcon = ctx.pool.Acquire();
+	if (!pcon)
 	{
 		return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER);
 	} // end if no cell
 
-	LBStatus rc = pcell->Start_Session(++next_client_id);
+	handle.pconn = pcon;
+	//handle.pdriver = this;
+
+	LBStatus rc = handle.Start_Session(ctx.epfd, ++next_client_id);
 	if (!LB_OK(rc))
 	{
 		//last_err = pcell->Get_Last_Error();
 		return rc;
 	} // end if failed to start session
 
-	handle.pcell = pcell;
-	handle.pdriver = this;
-
 	return LB_Make();
 } // end Get_Session
+
 
 
 void NeoDriver::Close()
@@ -420,7 +428,7 @@ void NeoDriver::Poll_Loop(CoreContext& ctx)
 		int nfds = epoll_wait(ctx.epfd, events, MAX_EVENTS, 1000); // 1 second timeout
 		for (int n = 0; n < nfds; ++n)
 		{
-			NeoCell* pcell = static_cast<NeoCell*>(events[n].data.ptr);
+			NeoConnection* pconn = static_cast<NeoConnection*>(events[n].data.ptr);
 			if (events[n].events & EPOLLIN)
 			{
 				if (events[n].data.fd == ctx.exit_fd)
@@ -435,21 +443,21 @@ void NeoDriver::Poll_Loop(CoreContext& ctx)
 				LBStatus rc = LB_Make(LBAction::LB_HASMORE);
 				while (LB_Action(rc) == LBAction::LB_HASMORE)
 				{
-					rc = pcell->Poll_Read();
+					rc = pconn->Poll_Readable();
 					if (!LB_OK(rc))
 					{
 						if (LBAction(LB_Action(rc)) == LBAction::LB_FAIL)
 						{
-							pcell->Stop();	// kill it
+							pconn->Terminate();	// kill it
 							break;
 						} // end if fail
 						else break; // should be wait only
 					} // end if error
 
 					// now begin decoding, if we have a full message
-					rc = pcell->Decode_Response(pcell->Get_Read_Buffer_Read_Ptr(), LB_Aux(rc));
-					if (pcell->requests.Is_Empty())
-						pcell->Reset_Read_Buffer();
+					rc = pconn->Decode_Response(pconn->read_buf.Read_Ptr(), LB_Aux(rc));
+					if (pconn->results.Is_Empty() && pconn->tasks.Is_Empty())
+						pconn->read_buf.Reset();
 				} // end while
 			} // end if readable
 		} // end for nfds

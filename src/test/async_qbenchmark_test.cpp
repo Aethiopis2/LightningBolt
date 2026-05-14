@@ -56,9 +56,9 @@ int main()
 {
     constexpr int QUERY_COUNT = 1000;
     std::string url = "bolt://localhost:7687";
-    BoltValue basic = Auth::Basic("neo4j", "");
+    BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
 
-    NeoDriver driver(url, basic, BoltValue::Make_Map(), 8);
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 2);
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) 
@@ -69,6 +69,7 @@ int main()
 
     while (completed.load() < QUERY_COUNT)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
 
     auto end = std::chrono::high_resolution_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();

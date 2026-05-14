@@ -40,11 +40,10 @@ NeoPool::NeoPool
 	BoltValue* pextras)
 	: epfd(epfd_), core_id(id)
 {
-	cells.reserve(ncells);
+	conns.reserve(ncells);
 	for (size_t i = 0; i < ncells; ++i)
 	{
-		cells.emplace_back(new NeoCell(epfd, ssl, clustered,
-			urls, pauth, pextras));
+		conns.emplace_back(new NeoConnection(ssl, urls, pauth, pextras));
 	} // end for
 } // end constructor
 
@@ -53,19 +52,19 @@ NeoPool::NeoPool
  * @brief returns the next cell in the pool based on the acquire function pointer 
  *	function address set by the constructor.
  */
-NeoCell* NeoPool::Acquire()
+NeoConnection* NeoPool::Acquire()
 {
 	size_t idx = rr.fetch_add(1, std::memory_order_relaxed);
-	return cells[idx % cells.size()].get();
+	return conns[idx % conns.size()].get();
 } // end Acquire
 
 
 /**
  * @brief gets the list of all cells
  */
-inline const std::vector<std::unique_ptr<NeoCell>>& NeoPool::Cells() const
+inline const std::vector<std::unique_ptr<NeoConnection>>& NeoPool::Connections() const
 {
-	return cells;
+	return conns;
 } // end cells
 
 
@@ -74,8 +73,8 @@ inline const std::vector<std::unique_ptr<NeoCell>>& NeoPool::Cells() const
  */
 void NeoPool::Close()
 {
-	for (auto& cell : cells)
+	for (auto& con : conns)
 	{
-		cell->Stop();
+		con->Terminate();
 	} // end for
 } // end Close

@@ -17,7 +17,7 @@ set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG -march=native")
 add_library(driver SHARED
     src/connection/tcp_client.cpp
     src/connection/neoconnection.cpp
-    src/neocell.cpp
+    
     src/bolt/bolt_encoder.cpp
     src/bolt/bolt_decoder.cpp
     src/bolt/bolt_jump_table.cpp

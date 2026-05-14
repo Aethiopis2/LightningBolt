@@ -21,8 +21,8 @@
 //===============================================================================|
 struct RoutingTable
 {
-	std::vector<NeoCell*> leaders;
-	std::vector<NeoCell*> followers;
+	std::vector<NeoConnection*> leaders;
+	std::vector<NeoConnection*> followers;
 };
 
 
@@ -56,20 +56,19 @@ public:
 		return *this;
 	} // end move assign
 
-	inline LBStatus Execute(CellCommand& cmd)
+	inline LBStatus Execute(ConnectionCommand&& cmd, const int epfd)
 	{
 		constexpr int MAX_RETRIES = 3;
-
 		for (int i = 0; i < MAX_RETRIES; ++i)
 		{
-			NeoCell* cell = Acquire(cmd.mode);
-			if (!cell) return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER);
+			NeoConnection* pconn = Acquire(cmd.mode);
+			if (!pconn) return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER);
 
-			LBStatus rc = cell->Start_Session();
+			LBStatus rc = pconn->Start_Session(epfd, 1);
 			if (!LB_OK(rc))
 				return rc;
 
-			rc = cell->Execute_Command(cmd);
+			rc = pconn->Run(cmd);
 			if (!LB_OK(rc))
 				return rc;
 
@@ -96,8 +95,7 @@ private:
 	std::atomic<size_t> rr_leaders{ 0 };	// round robin pointer for leader connections
 	std::atomic<size_t> rr_followers{ 0 };	// round robin pointer for follower connections
 
-
-	inline NeoCell* Acquire(QueryMode mode)
+	inline NeoConnection* Acquire(QueryMode mode)
 	{
 		auto* table = g_routing.load(std::memory_order_acquire);
 		if (!table) return pool.Acquire();		// fallback
@@ -123,8 +121,27 @@ private:
 
 	void Refresh_Routing()
 	{
-		NeoCell* seed = pool.Acquire();
+		NeoConnection* seed = pool.Acquire();
 		if (!seed) return;
+
+		ConnectionCommand cmd(ConnectionCmdType::Route);
+		LBStatus rc = seed->Route(cmd);
+		if (!LB_OK(rc))
+		{
+			//pool.Release(seed);
+			return;
+		} // end if failed to route
+
+		seed->Wait_For_Response();
+		//auto res = seed->requests.Dequeue();
+		//if (!res.has_value() || res->result.error)
+		//{
+		//	pool.Release(seed);
+		//	return;
+		//} // end if no response or error
+
+		// populate the new routing table
+		//res->result.fields;  // should contain the routing info, parse it to fill the new table
 
 		/*auto* new_table = seed->connection.Route();
 		g_routing.store(new_table, std::memory_order_release);*/

@@ -11,7 +11,7 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
-#include "neocell.h"
+#include "connection/neoconnection.h"
 
 
 
@@ -45,7 +45,7 @@ public:
 	NeoPool(NeoPool&& other) noexcept
 		: epfd(other.epfd),
 		core_id(other.core_id),
-		cells(std::move(other.cells)),   // move, not copy
+		conns(std::move(other.conns)),   // move, not copy
 		rr(other.rr.load())
 	{
 		// no need to clear other.cells, move already empties it
@@ -57,7 +57,7 @@ public:
 		{
 			epfd = other.epfd;
 			core_id = other.core_id;
-			cells = std::move(other.cells);   // move, not copy
+			conns = std::move(other.conns);   // move, not copy
 			rr.store(other.rr.load());
 		}
 		return *this;
@@ -66,8 +66,8 @@ public:
 	NeoPool(const NeoPool&) = delete;
 	NeoPool& operator=(const NeoPool&) = delete;
 
-	NeoCell* Acquire();
-	inline const std::vector<std::unique_ptr<NeoCell>>& Cells() const;
+	NeoConnection* Acquire();
+	inline const std::vector<std::unique_ptr<NeoConnection>>& Connections() const;
 	void Close();
 
 private:
@@ -75,6 +75,6 @@ private:
 	int epfd;
 	int core_id;
 
-	std::vector<std::unique_ptr<NeoCell>> cells;
+	std::vector<std::unique_ptr<NeoConnection>> conns;
 	std::atomic<size_t> rr{ 0 };
 };
