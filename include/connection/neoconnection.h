@@ -77,18 +77,17 @@ public:
     LBStatus Start_Session(const int epfd_, const int id);
     LBStatus Decode_Response(u8* ptr, const size_t bytes);
 
-	LBStatus Run(ConnectionCommand& command);
-    LBStatus Begin(ConnectionCommand& command);
-    LBStatus Commit(ConnectionCommand& command);
-    LBStatus Rollback(ConnectionCommand& command);
-
-    LBStatus Pull(ConnectionCommand& command);
-    LBStatus Discard(ConnectionCommand& command);
-    LBStatus Telemetry(ConnectionCommand& command);
-    LBStatus Reset(ConnectionCommand& command);
-    LBStatus Logoff(ConnectionCommand& command);
-    LBStatus Ack_Failure(ConnectionCommand& command);
-    LBStatus Route(ConnectionCommand& command);
+	LBStatus Run(RequestCommand& command);
+    LBStatus Begin(RequestCommand& command);
+    LBStatus Commit(RequestCommand& command);
+    LBStatus Rollback(RequestCommand& command);
+    LBStatus Pull(RequestCommand& command);
+    LBStatus Discard(RequestCommand& command);
+    LBStatus Telemetry(RequestCommand& command);
+    LBStatus Reset(RequestCommand& command);
+    LBStatus Logoff(RequestCommand& command);
+    LBStatus Ack_Failure(RequestCommand& command);
+    LBStatus Route(RequestCommand& command);
     LBStatus Goodbye();
 
     void Terminate();
@@ -126,6 +125,8 @@ private:
 	
     LatencyHistogram latencies;         // latency measurement structure
     Neo4jVerInfo supported_version;     // holds major and minor versions for server
+
+    LockFreeQueue<RequestCommand> commands;  // queue of pending commands for encoding
     LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query responses
 	LockFreeQueue<BoltResult> results;  // queue of decoded query results for consumption by session
 
@@ -146,7 +147,7 @@ private:
     LBStatus Decode_One(DecoderTask& task);
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
     LBStatus Flush();
-    LBStatus Encode_And_Flush(TaskState s, ConnectionCommand& command, BoltMessage& v);
+    LBStatus Encode_And_Flush(TaskState s, RequestCommand& command, BoltMessage& v);
     LBStatus Enqueue_Task(TaskState s);
     LBStatus Retry_Encode(BoltMessage&);
 

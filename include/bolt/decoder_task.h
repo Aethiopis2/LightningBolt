@@ -49,9 +49,11 @@ constexpr int QUERY_STATES = 15;
 
 
 /**
- * @brief command types for connection object
+ * @brief command types for connection, helps preserve contexts for sessions and
+ *  helps for retries and routing decisions. For example, if a connection receives a run command, it can
+ *  use this information to determine how to handle the request and what state to expect in the response.
  */
-enum class ConnectionCmdType
+enum class RequestCmdType
 {
     Run,
     Begin,
@@ -79,9 +81,9 @@ enum class QueryMode : u8
  *  The structure is meant to capture the layout of different API's offered by
  *  the connection object.
  */
-struct ConnectionCommand
+struct RequestCommand
 {
-    ConnectionCmdType type;       // the command types, see enum above
+    RequestCmdType type;       // the command types, see enum above
 
     const char* cypher;     // the query string in relation to run command
     int n = -1;             // size for fetching
@@ -93,13 +95,13 @@ struct ConnectionCommand
 	std::string database;   // database name for begin trx
     QueryMode mode;
 
-    BoltResult result;      // gets the result here
-    std::function<void(BoltResult&)> cb;       // callback for async
+    std::function<void(BoltResult&)> cb = nullptr;       // callback for async
 
     // constructors
-    ConnectionCommand() = default;
-    ConnectionCommand(ConnectionCmdType tp) : type(tp) {}
-	ConnectionCommand(ConnectionCmdType tp, const char* c, int nfetch = -1, 
+    RequestCommand() = default;
+    RequestCommand(RequestCmdType tp) : type(tp) {}
+    RequestCommand(RequestCmdType tp, std::function<void(BoltResult&)>& callback) : type(tp), cb(std::move(callback)) {}
+	RequestCommand(RequestCmdType tp, const char* c, int nfetch = -1, 
         BoltValue _param = BoltValue::Make_Map(), BoltValue _extra = BoltValue::Make_Map()) :
         type(tp), cypher(c), n(nfetch), param(std::move(param)), extra(std::move(_extra)) {}
 };
@@ -127,12 +129,12 @@ struct DecoderTask
 {
     TaskState state;        // current state of the query
     BoltView view;          // view into the buffer for this query
-    ConnectionCommand cmd;  // connection command for requests
 	BoltResult result;      // decoded result for this query
+    RequestCommand* prequest = nullptr;   // the original request for this task, used for retries and routing decisions
 
     DecoderTask() = default;
-    DecoderTask(TaskState s) : state(s) { }
-    DecoderTask(TaskState s, ConnectionCommand&& command) : state(s), cmd(std::move(command)) {}
+    DecoderTask(TaskState s) : state(s) {}
+    DecoderTask(TaskState s, RequestCommand* cmd) : state(s), prequest(cmd) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

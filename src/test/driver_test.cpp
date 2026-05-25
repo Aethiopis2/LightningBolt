@@ -32,7 +32,7 @@ int main()
     driver.Execute_Async(
         [](BoltResult& result)
         {
-            //if (result.error) Fatal("%s", driver.Get_Last_Error().c_str());
+            if (result.error) Fatal("%s", result.Get_Error_Desc().c_str());
 
             Utils::Print("Meta: %s", result.fields.ToString().c_str());
             Utils::Print("Records:");

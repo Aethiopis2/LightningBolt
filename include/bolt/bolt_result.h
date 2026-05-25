@@ -32,7 +32,6 @@ struct BoltResult
     BoltDecoder* pdec;     // pointer to the decoder for the result
     BoltMessage fields;    // the field names for the record
     BoltMessage summary;   // the summary message at end of records
-	std::string error_msg;   // error message if any, empty otherwise
 
     size_t message_count{ 0 };  // count of messages contained within records
 	size_t total_bytes{ 0 };    // total bytes consumed by the records
@@ -93,4 +92,6 @@ struct BoltResult
 
     iterator begin() { return iterator(pdec, start_offset); }
     iterator end() { return iterator(pdec, start_offset + total_bytes); }
+
+    std::string Get_Error_Desc() const { return iterator(pdec, start_offset).bv.ToString(); }
 };

@@ -166,24 +166,25 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
 
         // now do decode it
         rc = Decode_One(task[0]);
-        task->view.offset += LB_Aux(rc);
+        task[0].view.offset += LB_Aux(rc);
 
         // LB_OK = done
         // LB_HASMORE = not done partial streaming possible
         // LB_RETRY = failed request, retry
         // LB_ROUTE = route error, refresh route table
         // LB_FAIL = terminal oops.
-        // All domains are from Neo4j
-        if (task->result.done)
+        // All domains are from Neo4j except for enqueue errors which are from driver domain.
+        if (task[0].result.done)
         {
-            if (task->cmd.cb)
+            if (task[0].prequest && task[0].prequest->cb)
             {
-                auto temp = std::move(task->result);	// move the result to a temp variable for the callback
-                task->cmd.cb(temp);	// call the callback if it exists
+                auto temp = std::move(task[0].result);	// move the result to a temp variable for the callback
+
+                task[0].prequest->cb(temp);	// call the callback if it exists
 			} // end if callback
             else
             {
-                results.Enqueue({ std::move(task->result) });	// enqueue the result for later retrieval by the user
+                results.Enqueue({ std::move(task[0].result) });	// enqueue the result for later retrieval by the user
                 Sub_Sync_Count();
                 // decrement the sync count to signal the user thread that a result is ready
 			} // end if not callback
@@ -499,7 +500,7 @@ LBStatus NeoConnection::Logon()
  *
  * @return 0 on success and -2 on application error
  */
-LBStatus NeoConnection::Run(ConnectionCommand& command)
+LBStatus NeoConnection::Run(RequestCommand& command)
 {
     // protect pool
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -525,7 +526,7 @@ LBStatus NeoConnection::Run(ConnectionCommand& command)
     } // end if wasn't good
     Encode_Pull(command.n);
 
-    if (!tasks.Enqueue({TaskState::Run, std::move(command)}))
+    if (!tasks.Enqueue({TaskState::Run, &command}))
         return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER, LBCode::LB_CODE_STATE_QUEUE_MEM);
 
     rc = Flush();
@@ -544,7 +545,7 @@ LBStatus NeoConnection::Run(ConnectionCommand& command)
  *
  * @return LB_OK status on success or LB_FAIL on send fails
  */
-LBStatus NeoConnection::Begin(ConnectionCommand& command)
+LBStatus NeoConnection::Begin(RequestCommand& command)
 {
     if (tran_count++ != 0)
         return 0;       // LB_OK
@@ -572,7 +573,7 @@ LBStatus NeoConnection::Begin(ConnectionCommand& command)
  *
  * @return LB_OK on success. LB_FAIL on failures.
  */
-LBStatus NeoConnection::Commit(ConnectionCommand& command)
+LBStatus NeoConnection::Commit(RequestCommand& command)
 {
     if (tran_count > 0)
     {
@@ -604,7 +605,7 @@ LBStatus NeoConnection::Commit(ConnectionCommand& command)
  *
  * @return LB_OK on success. Alas LB_FAIL on flush error
  */
-LBStatus NeoConnection::Rollback(ConnectionCommand& command)
+LBStatus NeoConnection::Rollback(RequestCommand& command)
 {
     if (tran_count > 0)
     {
@@ -634,10 +635,10 @@ LBStatus NeoConnection::Rollback(ConnectionCommand& command)
 *
 * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
 */
-LBStatus NeoConnection::Pull(ConnectionCommand& command)
+LBStatus NeoConnection::Pull(RequestCommand& command)
 {
     Encode_Pull(command.n);
-    if (!tasks.Enqueue({ TaskState::Pull, std::move(command) }))
+    if (!tasks.Enqueue({ TaskState::Pull, &command }))
 		return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER, LBCode::LB_CODE_STATE_QUEUE_MEM);
 
     LBStatus rc = Flush();
@@ -652,7 +653,7 @@ LBStatus NeoConnection::Pull(ConnectionCommand& command)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Discard(ConnectionCommand& command)
+LBStatus NeoConnection::Discard(RequestCommand& command)
 {
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage discard
@@ -679,7 +680,7 @@ LBStatus NeoConnection::Discard(ConnectionCommand& command)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Telemetry(ConnectionCommand& command)
+LBStatus NeoConnection::Telemetry(RequestCommand& command)
 {
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage tel(BoltValue(BOLT_TELEMETRY, { command.n }));
@@ -698,7 +699,7 @@ LBStatus NeoConnection::Telemetry(ConnectionCommand& command)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Reset(ConnectionCommand& command)
+LBStatus NeoConnection::Reset(RequestCommand& command)
 {
     // memorize the last pool offset to cleanup later
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -716,7 +717,7 @@ LBStatus NeoConnection::Reset(ConnectionCommand& command)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Logoff(ConnectionCommand& command)
+LBStatus NeoConnection::Logoff(RequestCommand& command)
 {
     LBStatus rc;
 
@@ -759,7 +760,7 @@ LBStatus NeoConnection::Goodbye()
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Ack_Failure(ConnectionCommand& command)
+LBStatus NeoConnection::Ack_Failure(RequestCommand& command)
 {
     // memorize last pool offset to cleanup later
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -783,7 +784,7 @@ LBStatus NeoConnection::Ack_Failure(ConnectionCommand& command)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Route(ConnectionCommand& command)
+LBStatus NeoConnection::Route(RequestCommand& command)
 {
     // keep track of pool, from here on we allocate from it
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -1199,7 +1200,7 @@ bool NeoConnection::Is_Record_Done(BoltMessage& summary)
  *
  * @return LB_0K status on success, alas LB_FAIL on failure.
  */
-LBStatus NeoConnection::Encode_And_Flush(TaskState s, ConnectionCommand& command, BoltMessage& msg)
+LBStatus NeoConnection::Encode_And_Flush(TaskState s, RequestCommand& command, BoltMessage& msg)
 {
     LBStatus rc = encoder.Encode(msg);
     if (!LB_OK(rc))
@@ -1212,7 +1213,7 @@ LBStatus NeoConnection::Encode_And_Flush(TaskState s, ConnectionCommand& command
         } // end if err
 	} // end if wasn't good
 
-    if (!tasks.Enqueue({s, std::move(command)}))
+    if (!tasks.Enqueue({s, &command}))
     {
         return LB_Make
         (
@@ -1290,7 +1291,7 @@ LBStatus NeoConnection::Success_Hello(DecoderTask& task)
         );
     } // end if
 
-    task.result.done = true;  // not gonna care about meta    
+    task.result.done = true;  // not gonna care about meta 
     return LBOK_INFO(task.view.size);
 } // end Success_Hello
 
@@ -1414,31 +1415,22 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     LBAction action;
     LBDomain domain;
 
-	BoltMessage err;
-	u8* ptr = read_buf.Data() + task.view.start + task.view.offset;
-	int skip = decoder.Decode(ptr, err);
-    task.result.error = true;
-    task.result.error_msg = err.ToString();
+	task.result.error = true;
+    last_err.pdec = &decoder;
+    last_err.start_offset = (task.view.start + task.view.offset);
+	last_err.message_count++;
+	last_err.error = true;
 
     TaskState ts = task.state;
+
     switch (ts)
     {
     case TaskState::Run:
-        /*if (!std::string("Neo.TransientError.General.DatabaseUnavailable").compare(r.begin().bv(0)["neo4j_code"].ToString()) )
-            action = LBAction::LB_HASMORE;
-        else action = LBAction::LB_FAIL;*/
-        /*if (!std::string("Neo.ClientError.Cluster.NotALeader").compare(task.result.err.msg(0)["neo4j_code"].ToString()) ||
-            !std::string("Neo.ClientError.General.ForbiddenOnReadOnlyDatabase").compare(task.result.err.msg(0)["neo4j_code"].ToString()))
-            action = LBAction::LB_REROUTE;
-        else if (!std::string("Neo.TransientError.General.DatabaseUnavailable").compare(task.result.err.msg(0)["neo4j_code"].ToString()) ||
-            !std::string("Neo.TransientError.Transaction.DeadlockDetected").compare(task.result.err.msg(0)["neo4j_code"].ToString()))
-            action = LBAction::LB_RETRY;
-        else action = LBAction::LB_FAIL;*/
         action = LBAction::LB_HASMORE;      // expects a pull ignored
         break;
 
     default:
-        task.result.done = true;
+		task.result.done = true;
         action = LBAction::LB_FAIL;
         domain = LBDomain::LB_DOM_NEO4J;
         break;
@@ -1449,7 +1441,7 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
         action, 
         domain, 
         LBCode::LB_CODE_NONE, 
-        skip
+		task.view.size
     );
 } // end Handle_Failure
 
@@ -1465,40 +1457,44 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
 LBStatus NeoConnection::Handle_Ignored(DecoderTask& task)
 {
     // process only on the final task
-    if (!tasks.Is_Empty())
+    if (tasks.Size() == 1)
     {
-        return LB_Make
-        (
-            LBAction::LB_HASMORE,
-            LBDomain::LB_DOM_NEO4J,
-            LBCode::LB_CODE_NONE,
-            task.view.size
-        );
-    } // end if has  more tasks incoming
-    
-	ConnectionCommand cmd(ConnectionCmdType::Reset);
-    LBStatus rc = Reset(cmd);
-    if (!LB_OK(rc)) return rc;
+        RequestCommand cmd(RequestCmdType::Reset);
+        LBStatus rc = Reset(cmd);
+        if (!LB_OK(rc)) return rc;
 
-    task.result.done = true;
-    task.result.error = true;
-	task.view.offset += task.view.size;   // skip the message
+        if (
+            !std::string("Neo.ClientError.Cluster.NotALeader").compare(last_err.begin().bv(0)["neo4j_code"].ToString()) ||
+            !std::string("Neo.ClientError.General.ForbiddenOnReadOnlyDatabase").compare(last_err.begin().bv(0)["neo4j_code"].ToString())
+            )
+        {
+            return LB_Make
+            (
+                LBAction::LB_RETRY,
+                LBDomain::LB_DOM_NEO4J,
+                LBCode::LB_CODE_NONE,
+                task.view.size
+            );
+        }
+        else
+        {
+            task.result = std::move(last_err);
+            task.result.done = true;
 
-    if (!std::string("Neo.TransientError.General.DatabaseUnavailable").
-        compare(task.result.error_msg))
-    {
-        return LB_Make
-        (
-            LBAction::LB_RETRY,
-            LBDomain::LB_DOM_NEO4J,
-            LBCode::LB_CODE_NONE,
-            task.view.size
-        );
-    } // end if transient error
+            return LB_Make
+            (
+                LBAction::LB_FAIL,
+                LBDomain::LB_DOM_NEO4J,
+                LBCode::LB_CODE_NONE,
+                task.view.size
+            );
+        } // end else not retriable
+	} // end if not the final task
 
+	tasks.Dequeue();   // discard the failed task, and reset the connection
     return LB_Make
     (
-        LBAction::LB_FAIL,
+        LBAction::LB_HASMORE,
         LBDomain::LB_DOM_NEO4J,
         LBCode::LB_CODE_NONE,
         task.view.size

@@ -25,7 +25,8 @@ add_library(driver SHARED
     src/utils/errors.cpp
     src/neodriver.cpp
     src/neopool.cpp 
-    src/neoerr.cpp "include/neorouter.h" "include/neosession.h")
+    src/neoerr.cpp 
+    "include/neosession.h")
 
 find_package(OpenSSL REQUIRED)
 target_include_directories(driver PUBLIC include ${OPENSSL_INCLUDE_DIR})

@@ -58,7 +58,7 @@ int main()
     std::string url = "bolt://localhost:7687";
     BoltValue basic = Auth::Basic("neo4j", "tobby@melona");
 
-    NeoDriver driver(url, basic, BoltValue::Make_Map(), 2);
+    NeoDriver driver(url, basic, BoltValue::Make_Map(), 3);
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < QUERY_COUNT; ++i) 

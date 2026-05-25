@@ -10,202 +10,17 @@
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
-#include <emmintrin.h>
-#include <immintrin.h>
 #include <sys/eventfd.h>
 #include "neodriver.h"
 
 
 
 
-// SIMD shorthands
-#if defined(__AVX2__)
-#define SIMD_TYPE __m256i
-#define LOADU(x) _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x))
-#define CMPEQ(a,b) _mm256_cmpeq_epi8(a,b)
-#define MOVEMASK(a) _mm256_movemask_epi8(a)
-#define SIMD_WIDTH 32
-#elif defined(__SSE2__)
-#define SIMD_TYPE __m128i
-#define LOADU(x) _mm_loadu_si128(reinterpret_cast<const __m128i*>(x))
-#define CMPEQ(a,b) _mm_cmpeq_epi8(a,b)
-#define MOVEMASK(a) _mm_movemask_epi8(a)
-#define SIMD_WIDTH 16
-#else
-#define SIMD_TYPE char*  // fallback scalar
-#endif
-
-
-
-//===============================================================================|
-//          KONSTANTS
-//===============================================================================|
-// Write keywords
-constexpr std::array<std::string_view, 6> write_keywords = {
-	"CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
-};
-
 
 
 //===============================================================================|
 //          FUNCTIONS
 //===============================================================================|
-/**
- * @brief checks if the query is a write query by looking for the presence of
- *  write keywords in the query string. This is used to determine the routing
- *  strategy for the query when connecting to a cluster.
- *
- * @param query the query string to check
- *
- * @return true if the query is a write query, false otherwise.
- */
-QueryMode Detect_Query_Mode_Scalar(const std::string_view query)
-{
-	bool in_string = false, in_line_comment = false, in_block_comment = false;
-	size_t n = query.size();
-
-	for (int i = 0; i < n; i++)
-	{
-		char c = query[i];
-
-		if (!in_line_comment && !in_block_comment && (c == '\'' || c == '"'))
-		{
-			in_string = !in_string;
-			continue;
-		} // end if string toggle
-
-		if (!in_string && !in_block_comment && i + 1 < n && c == '/' && query[i + 1] == '/')
-		{
-			in_line_comment = true;
-			++i;
-			continue;
-		} // end if line comment
-
-		if (in_line_comment && c == '\n')
-		{
-			in_line_comment = false;
-			continue;
-		} // end if newline
-
-		if (!in_string && !in_line_comment && i + 1 < n && c == '/' && query[i + 1] == '*')
-		{
-			in_block_comment = true;
-			++i;
-			continue;
-		} // end if block comment start
-
-		if (in_block_comment && c == '*' && i + 1 < n && query[i + 1] == '/')
-		{
-			in_block_comment = false;
-			++i;
-			continue;
-		} // end if block comment end
-
-		if (!in_string && !in_line_comment && !in_block_comment)
-		{
-			for (auto kw : write_keywords)
-			{
-				size_t kw_len = kw.size();
-				if (i + kw_len > n) continue;
-				bool match = true;
-				for (size_t j = 0; j < kw_len; ++j)
-				{
-					if (std::tolower(query[i + j]) != kw[j])
-					{
-						match = false;
-						break;
-					} // end if char mismatch
-				} // end for kw chars
-
-				if (match) return QueryMode::Write;
-			} // end nested if
-		} // end if not in string or comment
-	} // end for
-
-	return QueryMode::Read;
-} // end Is_Write_Query
-
-
-#if defined(__SSE2__) || defined(__AVX2__)
-QueryMode Detect_Query_Mode_SIMD(std::string_view query)
-{
-	bool in_string = false, in_line_comment = false, in_block_comment = false;
-	size_t n = query.size();
-
-	for (size_t i = 0; i < n; ++i)
-	{
-		char c = query[i];
-
-		if (!in_line_comment && !in_block_comment && (c == '\'' || c == '"'))
-		{
-			in_string = !in_string;
-			continue;
-		} // end if comment
-
-		if (!in_string && !in_block_comment && i + 1 < n && c == '/' && query[i + 1] == '/')
-		{
-			in_line_comment = true; ++i; continue;
-		} // end if string
-
-		if (in_line_comment && c == '\n')
-		{
-			in_line_comment = false;
-			continue;
-		} // end if line comment
-
-		if (!in_string && !in_line_comment && i + 1 < n && c == '/' && query[i + 1] == '*')
-		{
-			in_block_comment = true; ++i; continue;
-		} // end if
-
-		if (in_block_comment && c == '*' && i + 1 < n && query[i + 1] == '/')
-		{
-			in_block_comment = false; ++i; continue;
-		} // end if
-
-		if (!in_string && !in_line_comment && !in_block_comment)
-		{
-			for (auto kw : write_keywords)
-			{
-				size_t kw_len = kw.size();
-				if (kw_len > SIMD_WIDTH || i + kw_len > n) continue;
-
-				alignas(SIMD_WIDTH) char buf[SIMD_WIDTH] = {};
-				for (size_t j = 0; j < kw_len; ++j) buf[j] = std::tolower(query[i + j]);
-
-				SIMD_TYPE q_vec = LOADU(buf);
-
-				alignas(SIMD_WIDTH) char kw_buf[SIMD_WIDTH] = {};
-				for (size_t j = 0; j < kw_len; ++j) kw_buf[j] = kw[j];
-
-				SIMD_TYPE kw_vec = LOADU(kw_buf);
-				SIMD_TYPE cmp = CMPEQ(q_vec, kw_vec);
-				int mask = MOVEMASK(cmp);
-
-				if ((mask & ((1 << kw_len) - 1)) == ((1 << kw_len) - 1))
-					return QueryMode::Write;
-			} // end for nested
-		} // end if
-	} // end for
-
-	return QueryMode::Read;
-} // end Detect_Query_Mode_SIMD
-#endif
-
-
-// --------------------
-// Unified wrapper
-// --------------------
-QueryMode Detect_Query_Mode(std::string_view query)
-{
-#if defined(__AVX2__) || defined(__SSE2__)
-	return Detect_Query_Mode_SIMD(query);
-#else
-	return Detect_Query_Mode_Scalar(query);
-#endif
-} // end Detect_Query_Mode
-
-
 /**
  * @brief associates a given thread to a specific core
  */
@@ -218,6 +33,8 @@ void PinThreadToCore(int core_id)
 	pthread_t current_thread = pthread_self();
 	pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 } // end PinThreadToCore
+
+
 
 
 //===============================================================================|
