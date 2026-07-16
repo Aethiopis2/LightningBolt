@@ -48,6 +48,7 @@ NeoDriver::NeoDriver(std::string urls, BoltValue auth, BoltValue extras, int cor
 {
 	next_client_id = 0;
 	_extras = BoltValue::Make_Map();
+	last_error = "";
 
 	// make sure every key in the extra map is in lowercase letters
 	size_t items = extras.map_val.key_offset + extras.map_val.size;
@@ -142,20 +143,12 @@ LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb,
 	BoltValue&& params, 
 	BoltValue&& extra)
 {
-	/*ConnectionCommand cmd;
-	cmd.type = ConnectionCmdType::Run;
-	cmd.cypher = query;
-	cmd.param = std::move(params);
-	cmd.extra = std::move(extra);
-	cmd.cb = cb;
-	cmd.mode = Detect_Query_Mode(query);*/
-
 	// core-local dispatch (no contention)
 	CoreContext& ctx = _cores[Next_Core()];
 	LBStatus rc = ctx.session.Start_Session(ctx.epfd, ++next_client_id);
 	if (!LB_OK(rc))
 	{
-		//last_err = pcell->Get_Last_Error();
+		last_error = ctx.session.Get_Last_Error();
 		return rc;
 	} // end if failed to start session
 
@@ -235,6 +228,11 @@ inline size_t NeoDriver::Next_Core()
 	return rr_core.fetch_add(1, std::memory_order_relaxed) % _cores.size();
 } // end Next_Core
 
+
+std::string NeoDriver::Get_Last_Error() const
+{
+	return last_error;
+} // end Get_Last_Error
 
 void NeoDriver::Poll_Loop(CoreContext& ctx)
 {

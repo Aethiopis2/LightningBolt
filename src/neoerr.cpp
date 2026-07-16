@@ -18,7 +18,9 @@ static const std::string err_strings[MAX_CODE]{
 	"Invaild task state, possible state mismatch.",
 	"Lockfree queue, Enqueue error. Out of memory."
 	"Receiving buffer out of memory."
+	"Invalid Session, connection not initialized.",
 };
+
 
 
 LBStatus LB_Handle_Status(LBStatus status, NeoConnection* pconn)
@@ -27,7 +29,30 @@ LBStatus LB_Handle_Status(LBStatus status, NeoConnection* pconn)
 	LBAction action = LB_Action(status);
 	LBDomain domain = LB_Domain(status);
 	LBCode code = LB_Code(status);
+		
+	switch (action)
+	{
+	case LBAction::LB_OK:
+		break;
+	case LBAction::LB_HASMORE:
+		break;
+	case LBAction::LB_WAIT:
+		break;
+	case LBAction::LB_RETRY:
+		break;
+	case LBAction::LB_RESET:
+		break;
+	case LBAction::LB_REROUTE:
+		break;
+	case LBAction::LB_FLUSH:
+		break;
 
+	case LBAction::LB_FAIL:
+		pconn->Terminate();
+		break;
+	default:
+		break;
+	}
 	//switch (action)
 //	{
 //	case LBAction::LB_OK:
@@ -121,11 +146,12 @@ std::string LB_Error_String(LBStatus status)
 	{
 	case LBDomain::LB_DOM_SYS:
 		return strerror(err);
-		break;
 
 	case LBDomain::LB_DOM_SSL:
 		return ERR_error_string(err, nullptr);
-		break;
+
+	case LBDomain::LB_DOM_NEO4J:
+		return "";
 
 	case LBDomain::LB_DOM_DRIVER:
 		return err_strings[static_cast<u8>(code)];

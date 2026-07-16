@@ -105,13 +105,13 @@ public:
 	LBStatus Get_Session(NeoSession& handle);
     int Fetch(BoltResult& result);
 
-    void Close();
-
     std::string Get_Last_Error() const;
+    void Close();
 
 private:
 
     std::string _urls;       // raw unfiltered url string for database connection
+    std::string last_error;  // the last error string
     BoltValue _auth;         // authentication token
     BoltValue _extras;       // any extra connection params (power user mode, not me).
 

@@ -29,7 +29,7 @@
  */
 struct BoltResult
 {
-    BoltDecoder* pdec;     // pointer to the decoder for the result
+    BoltDecoder* pdec{ nullptr };     // pointer to the decoder for the result
     BoltMessage fields;    // the field names for the record
     BoltMessage summary;   // the summary message at end of records
 

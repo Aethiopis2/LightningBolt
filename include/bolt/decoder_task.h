@@ -44,8 +44,9 @@ enum class TaskState : u8 {
     Reset,          // driver is expecting reset success/fail message
     Telemetry,      // driver is expecting telemetry success/fail message
     Ack_Failure,    // driver is expecting ack_failure success/fail message
+    Ignored,        // driver task has been ignored
 };
-constexpr int QUERY_STATES = 15;
+constexpr int QUERY_STATES = 16;
 
 
 /**

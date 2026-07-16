@@ -26,10 +26,10 @@ static std::atomic<int> records{ 0 };
 int main()
 {
     // 1. start driver
-	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", "tobby@melona"));
+	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", ""));
     
 	BoltResult result;
-    driver.Execute_Async(
+    LBStatus rc = driver.Execute_Async(
         [](BoltResult& result)
         {
             if (result.error) Fatal("%s", result.Get_Error_Desc().c_str());
@@ -38,7 +38,7 @@ int main()
             Utils::Print("Records:");
             for (auto r : result)
             {
-                cout << r.ToString() << "\n";
+                std::cout << r.ToString() << "\n";
                 records.fetch_add(1, std::memory_order_acq_rel);
             } // end for
             Utils::Print("Summary: %s", result.summary.ToString().c_str());
@@ -46,11 +46,15 @@ int main()
         }, "MATCH (n) RETURN n"
     );
 
+	if (!LB_OK(rc)) 
+        Fatal("Failed to execute query: %s", driver.Get_Last_Error().c_str());
+
     // 2. wait for completion
     while (completed.load(std::memory_order_acquire) < 1)
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
 
     // 3. report
-    cout << "Total Records Retrieved: " << records.load(std::memory_order_acquire) << endl;
+    std::cout << "Total Records Retrieved: " << records.load(std::memory_order_acquire) << endl;
+
 	return 0;
 }

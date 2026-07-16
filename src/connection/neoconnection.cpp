@@ -60,7 +60,7 @@ NeoConnection::~NeoConnection() {}
  *
  * @return LB_OK on success. LB_FAIL on terminal fail.
  */
-LBStatus NeoConnection::Start_Session(const int epfd_, const int id)
+LBStatus NeoConnection::Connect_Neo4j(const int epfd_, const int id)
 {
     // trivially reject false calls
     if (Is_Open()) return LB_Make();
@@ -76,28 +76,6 @@ LBStatus NeoConnection::Start_Session(const int epfd_, const int id)
     else  // version 4 and below 
         rc = Send_Hellov4();
 
-    if (!LB_OK(rc)) return rc;
-    Wait_For_Response();
-
-    // check decoded value
-    auto res = results.Dequeue();
-    if (res.has_value())
-    {
-        if (res->error)
-        {
-            rc = LB_Make
-            (
-                LBAction::LB_FAIL,
-                LBDomain::LB_DOM_NEO4J
-            );
-        } // end if failed
-    } // end if
-
-    latencies.Record_Latency
-    (
-        std::chrono::high_resolution_clock::now() -
-        res->start_clock
-    );
     return rc;
 } // end Start_Session
 
@@ -166,7 +144,8 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
 
         // now do decode it
         rc = Decode_One(task[0]);
-        task[0].view.offset += LB_Aux(rc);
+        task[0].view.offset += aux;
+        LBAction action = LB_Action(rc);
 
         // LB_OK = done
         // LB_HASMORE = not done partial streaming possible
@@ -174,20 +153,60 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
         // LB_ROUTE = route error, refresh route table
         // LB_FAIL = terminal oops.
         // All domains are from Neo4j except for enqueue errors which are from driver domain.
-        if (task[0].result.done)
+
+        switch (action)
         {
+        case LBAction::LB_OK:
+            if (task[0].result.done)
+            {
+                if (task[0].prequest && task[0].prequest->cb)
+                {
+                    auto temp = std::move(task[0].result);	// move the result to a temp variable for the callback
+                    task[0].prequest->cb(temp);	// call the callback if it exists
+                } // end if callback
+                else
+                {
+                    results.Enqueue({ std::move(task[0].result) });	// enqueue the result for later retrieval by the user
+                    Sub_Sync_Count();
+                    // decrement the sync count to signal the user thread that a result is ready
+                } // end if not callback
+
+				task = Get_Next_Task(ptr - read_buf.Data(), total_decode - decoded);
+			} // end if done
+            break;
+        case LBAction::LB_HASMORE:
+            break;
+        case LBAction::LB_WAIT:
+            break;
+        case LBAction::LB_RETRY:
+            break;
+        case LBAction::LB_RESET:
+			std::cout << "LB_RESET action received, sending RESET message to server." << std::endl;
+            tasks.Dequeue();	// dequeue the task as it's done
+            if (!tasks.Is_Empty())
+            {
+                task = &tasks.Front()->get();	// move the next task to the front for decoding
+                task->view.start = ptr - read_buf.Data();			        // set the cursor to the start of the buffer
+                task->view.size = total_decode - decoded;	// set the size to the number of bytes received
+                task->view.offset = 0;			            // set the offset to 0 for the start of the buffer
+            } // end if not empty
+            break;
+        case LBAction::LB_REROUTE:
+            break;
+        case LBAction::LB_FLUSH:
+            break;
+
+        case LBAction::LB_FAIL:
             if (task[0].prequest && task[0].prequest->cb)
             {
-                auto temp = std::move(task[0].result);	// move the result to a temp variable for the callback
-
-                task[0].prequest->cb(temp);	// call the callback if it exists
-			} // end if callback
+                task[0].prequest->cb(last_err);	// call the callback if it exists
+            } // end if callback
             else
             {
-                results.Enqueue({ std::move(task[0].result) });	// enqueue the result for later retrieval by the user
+                results.Enqueue({ std::move(last_err) });	// enqueue the result for later retrieval by the user
                 Sub_Sync_Count();
                 // decrement the sync count to signal the user thread that a result is ready
-			} // end if not callback
+            } // end if not callback
 
             tasks.Dequeue();	// dequeue the task as it's done
             if (!tasks.Is_Empty())
@@ -197,8 +216,48 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
                 task->view.size = total_decode - decoded;	// set the size to the number of bytes received
                 task->view.offset = 0;			            // set the offset to 0 for the start of the buffer
             } // end if not empty
-            
-		} // end if done
+			else Terminate();	// terminate the connection as there are no more tasks to process
+            break;
+        default:
+            break;
+        }
+
+  //      if ((action == LBAction::LB_OK || action == LBAction::LB_FAIL) && task[0].result.done)
+  //      {
+  //          if (task[0].prequest && task[0].prequest->cb)
+  //          {
+  //              auto temp = std::move(task[0].result);	// move the result to a temp variable for the callback
+
+  //              task[0].prequest->cb(temp);	// call the callback if it exists
+		//	} // end if callback
+  //          else
+  //          {
+  //              results.Enqueue({ std::move(task[0].result) });	// enqueue the result for later retrieval by the user
+  //              Sub_Sync_Count();
+  //              // decrement the sync count to signal the user thread that a result is ready
+		//	} // end if not callback
+
+  //          tasks.Dequeue();	// dequeue the task as it's done
+  //          if (!tasks.Is_Empty())
+  //          {
+  //              task = &tasks.Front()->get();	// move the next task to the front for decoding
+  //              task->view.start = ptr - read_buf.Data();			        // set the cursor to the start of the buffer
+  //              task->view.size = total_decode - decoded;	// set the size to the number of bytes received
+  //              task->view.offset = 0;			            // set the offset to 0 for the start of the buffer
+  //          } // end if not empty
+  //          
+		//} // end if done
+  //      else if (action == LBAction::LB_HASMORE && task[0].result.done)
+  //      {
+		//	tasks.Dequeue();	// dequeue the task as it's done
+  //          if (!tasks.Is_Empty())
+  //          {
+  //              task = &tasks.Front()->get();	// move the next task to the front for decoding
+  //              task->view.start = ptr - read_buf.Data();			        // set the cursor to the start of the buffer
+  //              task->view.size = total_decode - decoded;	// set the size to the number of bytes received
+  //              task->view.offset = 0;			            // set the offset to 0 for the start of the buffer
+  //          } // end if not empty
+  //      }
     } // end while
 
     // update the buffer pos, stats and all with what's actually decoded
@@ -879,6 +938,12 @@ std::string NeoConnection::Get_Port() const { return port; }
 
 
 
+std::string NeoConnection::Get_Last_Error() const
+{
+    return last_err.Get_Error_Desc();
+} // end Get_Last_Error
+
+
 
 //===============================================================================|
 
@@ -1286,13 +1351,12 @@ LBStatus NeoConnection::Success_Hello(DecoderTask& task)
         (
             LBAction::LB_HASMORE,
             LBDomain::LB_DOM_NEO4J,
-            LBCode::LB_CODE_NONE,
-            task.view.size
+            LBCode::LB_CODE_NONE
         );
     } // end if
 
     task.result.done = true;  // not gonna care about meta 
-    return LBOK_INFO(task.view.size);
+    return LB_Make();
 } // end Success_Hello
 
 
@@ -1371,7 +1435,43 @@ LBStatus NeoConnection::Success_Record(DecoderTask& task)
  */
 LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 {
+    if (
+        !std::string("Neo.TransientError.General.DatabaseUnavailable").compare(last_err.begin().bv(0)["neo4j_code"].ToString())
+        )
+    {
+		task.result = std::move(last_err);
+        task.result.done = true;
+        return LB_Make();
+        /*return LB_Make
+        (
+            LBAction::LB_RETRY,
+            LBDomain::LB_DOM_NEO4J,
+            LBCode::LB_CODE_NONE,
+            task.view.size
+        );*/
+    }
+    else if (
+        !std::string("Neo.ClientError.General.ForbiddenOnReadOnlyDatabase").compare(last_err.begin().bv(0)["neo4j_code"].ToString()) ||
+        !std::string("Neo.ClientError.Cluster.NotALeader").compare(last_err.begin().bv(0)["neo4j_code"].ToString())
+        )
+    {
+        {
+			task.result = std::move(last_err);
+            task.result.done = true;
+            return LB_Make
+            (
+                LBAction::LB_REROUTE,
+                LBDomain::LB_DOM_NEO4J,
+                LBCode::LB_CODE_NONE,
+                task.view.size
+            );
+        }
+    }
+    
+    // whatever error had been reset
+    task.result = std::move(last_err);
     task.result.done = true;
+
     return LB_Make();
 } // end Success_Reset
 
@@ -1416,6 +1516,7 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     LBDomain domain;
 
 	task.result.error = true;
+
     last_err.pdec = &decoder;
     last_err.start_offset = (task.view.start + task.view.offset);
 	last_err.message_count++;
@@ -1440,8 +1541,7 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     (
         action, 
         domain, 
-        LBCode::LB_CODE_NONE, 
-		task.view.size
+        LBCode::LB_CODE_NONE
     );
 } // end Handle_Failure
 
@@ -1457,44 +1557,38 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
 LBStatus NeoConnection::Handle_Ignored(DecoderTask& task)
 {
     // process only on the final task
-    if (tasks.Size() == 1)
+    if (tasks.Size() > 1)
     {
-        RequestCommand cmd(RequestCmdType::Reset);
-        LBStatus rc = Reset(cmd);
-        if (!LB_OK(rc)) return rc;
+        if (task.state != TaskState::Ignored)
+            task.state = TaskState::Ignored;
+		else task.result.done = true;   // we got the ignored message for the ignored task, mark it done
 
-        if (
-            !std::string("Neo.ClientError.Cluster.NotALeader").compare(last_err.begin().bv(0)["neo4j_code"].ToString()) ||
-            !std::string("Neo.ClientError.General.ForbiddenOnReadOnlyDatabase").compare(last_err.begin().bv(0)["neo4j_code"].ToString())
-            )
-        {
-            return LB_Make
-            (
-                LBAction::LB_RETRY,
-                LBDomain::LB_DOM_NEO4J,
-                LBCode::LB_CODE_NONE,
-                task.view.size
-            );
-        }
-        else
-        {
-            task.result = std::move(last_err);
-            task.result.done = true;
-
-            return LB_Make
-            (
-                LBAction::LB_FAIL,
-                LBDomain::LB_DOM_NEO4J,
-                LBCode::LB_CODE_NONE,
-                task.view.size
-            );
-        } // end else not retriable
+        return LB_Make
+        (
+            LBAction::LB_HASMORE,
+            LBDomain::LB_DOM_NEO4J,
+            LBCode::LB_CODE_NONE
+        );
 	} // end if not the final task
 
-	tasks.Dequeue();   // discard the failed task, and reset the connection
+    RequestCommand cmd(RequestCmdType::Reset);
+    LBStatus rc = Reset(cmd);
+    if (!LB_OK(rc)) return rc;
+
+    /*if (tasks.Size() == 1)
+    {
+		TaskState ts = task.state;*/
+        
+
+   
+	//} // end if not the final task
+
+    
+	//else tasks.Dequeue();   // discard the failed task, and reset the connection
+
     return LB_Make
     (
-        LBAction::LB_HASMORE,
+        LBAction::LB_RESET,
         LBDomain::LB_DOM_NEO4J,
         LBCode::LB_CODE_NONE,
         task.view.size
@@ -1641,3 +1735,20 @@ LBStatus NeoConnection::Retry_Encode(BoltMessage& dat)
 
     return LB_Make();
 } // end Retry_Encode
+
+
+DecoderTask* NeoConnection::Get_Next_Task(const size_t offset, const size_t size)
+{
+    DecoderTask* ptask = nullptr;
+
+    tasks.Dequeue();
+    if (!tasks.Is_Empty())
+    {
+        ptask = &tasks.Front()->get();
+        ptask->view.start = offset;	    /// set the cursor to the start of the buffer
+        ptask->view.size = size;	    // set the size to the number of bytes received
+        ptask->view.offset = 0;			            // set the offset to 0 for the start of the buffer
+	} // end if not empty
+
+    return ptask;
+} // end Get_Current_Task

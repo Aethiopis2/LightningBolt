@@ -15,6 +15,7 @@
 #include <immintrin.h>
 #include <sys/eventfd.h>
 #include "neopool.h"
+#include "neoerr.h"
 
 
 
@@ -358,7 +359,33 @@ public:
 			pconn = pool.Acquire();
 		} // end if no connection
 
-		return pconn->Start_Session(epfd, client_id);
+		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id);
+		if (!LB_OK(rc))
+			return rc;
+
+		pconn->Wait_For_Response();
+
+		// check decoded value
+		auto res = pconn->results.Dequeue();
+		if (res.has_value())
+		{
+			if (res->error)
+			{
+				rc = LB_Make
+				(
+					LBAction::LB_FAIL,
+					LBDomain::LB_DOM_NEO4J
+				);
+			} // end if failed
+		} // end if
+
+		pconn->latencies.Record_Latency
+		(
+			std::chrono::high_resolution_clock::now() -
+			res->start_clock
+		);
+
+		return LB_Make();
 	} // end Start_Session
 
 
@@ -441,11 +468,18 @@ public:
      */
     bool Valid() const { return pconn != nullptr; }
 
+
+	std::string Get_Last_Error() const
+	{
+		return pconn ? pconn->Get_Last_Error() : 
+			LB_Error_String(LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER, LB_Code(7)));
+	} // end Get_Last_Error
+
+
 private:
 
 	NeoConnection* pconn;
 	NeoPool& pool;
-	std::string err_desc;
 
 
 	// For debug builds, we can track the thread that owns this session to ensure thread safety.

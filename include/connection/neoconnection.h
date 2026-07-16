@@ -74,7 +74,7 @@ public:
         const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
 
-    LBStatus Start_Session(const int epfd_, const int id);
+    LBStatus Connect_Neo4j(const int epfd_, const int id);
     LBStatus Decode_Response(u8* ptr, const size_t bytes);
 
 	LBStatus Run(RequestCommand& command);
@@ -127,7 +127,7 @@ private:
     Neo4jVerInfo supported_version;     // holds major and minor versions for server
 
     LockFreeQueue<RequestCommand> commands;  // queue of pending commands for encoding
-    LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query responses
+	LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query tasks for decoding
 	LockFreeQueue<BoltResult> results;  // queue of decoded query results for consumption by session
 
 
@@ -175,6 +175,7 @@ private:
         const std::string& database);
     BoltMessage Route_Legacy(const BoltValue& routing);
 
+	DecoderTask* Get_Next_Task(const size_t offset, const size_t size);
 
     // success handler table
     using Success_Fn = LBStatus (NeoConnection::*)(DecoderTask&);
@@ -195,5 +196,6 @@ private:
         &NeoConnection::Success_Reset,      // TaskState::Reset - success handler for RESET message
         &NeoConnection::Success_None,       // TaskState::Telemetry - do nothing handler for TELMETRY message
         &NeoConnection::Success_None,       // TaskState::Ack_Failure - do nothing handler for v1 Ack_Failure
+        &NeoConnection::Handle_Ignored,     // deals with ignored tasks
     };
 };

@@ -35,7 +35,7 @@ int main()
     {
         std::string con = "";
         NeoDriver driver(con,
-            Auth::Basic("neo4j", "tobby@melona"));
+            Auth::Basic("neo4j", ""));
 
         NeoSession session;
         LBStatus rc = driver.Get_Session(session);

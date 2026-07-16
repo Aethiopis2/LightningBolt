@@ -58,7 +58,7 @@ void Test_Record_Fetch()
         LBStatus rc = driver.Get_Session(session);
 
         if (!LB_OK(rc))
-            Fatal("%s", "Just no session for now");
+            Fatal("%s", session.Get_Last_Error().c_str());
         Test test;
         //session.Clear_Histo();
 
