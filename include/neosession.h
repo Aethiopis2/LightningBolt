@@ -366,26 +366,23 @@ public:
 		pconn->Wait_For_Response();
 
 		// check decoded value
-		auto res = pconn->results.Dequeue();
-		if (res.has_value())
+		auto res = pconn->results.Front().value();
+		if (res.get().error)
 		{
-			if (res->error)
-			{
-				rc = LB_Make
-				(
-					LBAction::LB_FAIL,
-					LBDomain::LB_DOM_NEO4J
-				);
-			} // end if failed
-		} // end if
+			rc = LB_Make
+			(
+				LBAction::LB_FAIL,
+				LBDomain::LB_DOM_NEO4J
+			);
+		} // end if failed
 
 		pconn->latencies.Record_Latency
 		(
 			std::chrono::high_resolution_clock::now() -
-			res->start_clock
+			res.get().start_clock
 		);
 
-		return LB_Make();
+		return rc;
 	} // end Start_Session
 
 

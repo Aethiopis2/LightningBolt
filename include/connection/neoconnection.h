@@ -77,18 +77,21 @@ public:
     LBStatus Connect_Neo4j(const int epfd_, const int id);
     LBStatus Decode_Response(u8* ptr, const size_t bytes);
 
-	LBStatus Run(RequestCommand& command);
-    LBStatus Begin(RequestCommand& command);
-    LBStatus Commit(RequestCommand& command);
-    LBStatus Rollback(RequestCommand& command);
-    LBStatus Pull(RequestCommand& command);
-    LBStatus Discard(RequestCommand& command);
-    LBStatus Telemetry(RequestCommand& command);
-    LBStatus Reset(RequestCommand& command);
-    LBStatus Logoff(RequestCommand& command);
-    LBStatus Ack_Failure(RequestCommand& command);
-    LBStatus Route(RequestCommand& command);
+	LBStatus Run(const char* cypher, BoltValue& params, BoltValue& extras, 
+		const int n = -1,
+        std::function<void(BoltResult&)> cb);
+    LBStatus Begin(BoltValue& extra, std::function<void(BoltResult&)> cb);
+    LBStatus Commit(BoltValue& extra, std::function<void(BoltResult&)> cb);
+    LBStatus Rollback(BoltValue& extra, std::function<void(BoltResult&)> cb);
+    LBStatus Pull(const int n, std::function<void(BoltResult&)> cb);
+    LBStatus Discard(const int n, std::function<void(BoltResult&)> cb);
+    LBStatus Route(BoltValue& routes, BoltValue& bookmark, const std::string db, BoltValue& extra,
+        std::function<void(BoltResult&)> cb);
+    LBStatus Reset(std::function<void(BoltResult&)> cb);
+    LBStatus Telemetry(const int n, std::function<void(BoltResult&)> cb);
+    LBStatus Logoff(std::function<void(BoltResult&)> cb);
     LBStatus Goodbye();
+    LBStatus Ack_Failure(std::function<void(BoltResult&)> cb);
 
     void Terminate();
     void Set_Host_Address(const std::string& host, const std::string& port);
@@ -106,6 +109,8 @@ private:
     int current_msg_len;    // length of the current message being decoded; used for partial decoding
     int unconsumed_count;   // prevents infinite loops due to Compact and Consume stalls
     int leftover_bytes;     // leftover bytes from previous decode
+	int retry_count;        // number of retries attempted for connection
+
 
     bool recv_paused;               // have we paused recv because of mem issues?
     std::atomic<bool> should_wait;  // used to hack the startup on auto retries to avoid waits!
@@ -126,9 +131,9 @@ private:
     LatencyHistogram latencies;         // latency measurement structure
     Neo4jVerInfo supported_version;     // holds major and minor versions for server
 
-    LockFreeQueue<RequestCommand> commands;  // queue of pending commands for encoding
+    /*LockFreeQueue<RequestCommand> commands;*/  // queue of pending commands for encoding
 	LockFreeQueue<DecoderTask> tasks;   // queue of pipelined query tasks for decoding
-	LockFreeQueue<BoltResult> results;  // queue of decoded query results for consumption by session
+	//LockFreeQueue<BoltResult> results;  // queue of decoded query results for consumption by session
 
 
     //====================
@@ -147,7 +152,8 @@ private:
     LBStatus Decode_One(DecoderTask& task);
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
     LBStatus Flush();
-    LBStatus Encode_And_Flush(TaskState s, RequestCommand& command, BoltMessage& v);
+    LBStatus Encode_And_Flush(TaskState s, BoltMessage& v,
+        std::function<void(BoltResult&)> cb);
     LBStatus Enqueue_Task(TaskState s);
     LBStatus Retry_Encode(BoltMessage&);
 

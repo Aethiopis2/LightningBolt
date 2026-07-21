@@ -131,11 +131,11 @@ struct DecoderTask
     TaskState state;        // current state of the query
     BoltView view;          // view into the buffer for this query
 	BoltResult result;      // decoded result for this query
-    RequestCommand* prequest = nullptr;   // the original request for this task, used for retries and routing decisions
+    std::function<void(BoltResult&)> _cb = nullptr;       // async callback into the session
 
     DecoderTask() = default;
     DecoderTask(TaskState s) : state(s) {}
-    DecoderTask(TaskState s, RequestCommand* cmd) : state(s), prequest(cmd) {}
+    DecoderTask(TaskState s, std::function<void(BoltResult&)> cb) : state(s), _cb(cb) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

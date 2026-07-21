@@ -148,7 +148,12 @@ LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb,
 	LBStatus rc = ctx.session.Start_Session(ctx.epfd, ++next_client_id);
 	if (!LB_OK(rc))
 	{
-		last_error = ctx.session.Get_Last_Error();
+		if (cb)
+		{
+			auto res = ctx.session.pconn->results.Dequeue();
+			cb(res.value());
+		} // end if callback
+		else last_error = ctx.session.Get_Last_Error();
 		return rc;
 	} // end if failed to start session
 

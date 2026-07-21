@@ -75,6 +75,8 @@ enum class LBCode : u8
 
 // maximum of allowed codes, really 8-bit value.
 constexpr u8 MAX_CODE = 255;
+constexpr u8 MAX_RETRY = 12;	// maximum number of retries for a request
+
 
 //===============================================================================|
 //          FUNCTIONS

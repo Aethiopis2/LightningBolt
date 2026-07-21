@@ -46,9 +46,6 @@ int main()
         }, "MATCH (n) RETURN n"
     );
 
-	if (!LB_OK(rc)) 
-        Fatal("Failed to execute query: %s", driver.Get_Last_Error().c_str());
-
     // 2. wait for completion
     while (completed.load(std::memory_order_acquire) < 1)
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
