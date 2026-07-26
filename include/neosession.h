@@ -251,7 +251,71 @@ public:
 			other.pconn = nullptr;
 		}
 		return *this;
-	}
+	} // end operator=
+
+
+	/**
+	 * @brief starts a session with neo4j server; i.e. it basically performs handshake
+	 *	and/or negotitates version and sends HELLO and LOGON (v5.x+) commands to server.
+	 * 
+	 * @param epfd descriptor to epoll event listener
+	 * @param client_fd descriptor for client socket
+	 *
+	 * @returns LB_OK on success or LB_FAIL on terminal fail
+	 */
+	LBStatus Start_Session(int epfd, int client_id)
+	{
+		if (!pconn)
+		{
+			pconn = pool.Acquire();
+		} // end if no connection
+
+		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id);
+		if (!LB_OK(rc))
+		{
+			LBAction action = LB_Action(rc);
+			LBDomain domain = LB_Domain(rc);
+			LBCode code = LB_Code(rc);
+
+			while (action == LBAction::LB_RETRY && ++retry_count < MAX_RETRY)
+			{
+#ifdef _DEBUG
+				Utils::Print("connection #%d failed. Retry attempt %d of %d times.",
+					client_id, retry_count, MAX_RETRY);
+#endif
+				std::this_thread::sleep_for(std::chrono::milliseconds(
+					(retry_count - 1) * 500));
+
+				rc = pconn->Connect_Neo4j(epfd, client_id);
+				action = LB_Action(rc);
+			} // end while
+
+			// at the end of the day..
+			retry_count = 0;
+			if (!LB_OK(rc)) return rc;
+		} // end if failed to connect
+
+		pconn->Wait_For_Response();
+
+		// check decoded value
+		auto res = pconn->results.Front().value();
+		if (res.get().error)
+		{
+			rc = LB_Make
+			(
+				LBAction::LB_FAIL,
+				LBDomain::LB_DOM_NEO4J
+			);
+		} // end if failed
+
+		pconn->latencies.Record_Latency
+		(
+			std::chrono::high_resolution_clock::now() -
+			res.get().start_clock
+		);
+
+		return rc;
+	} // end Start_Session
 
     LBStatus Run_Async(
 		std::function<void(BoltResult&)> cb,
@@ -352,40 +416,6 @@ public:
     } // end Begin
 
 
-	LBStatus Start_Session(int epfd, int client_id)
-	{
-		if (!pconn)
-		{
-			pconn = pool.Acquire();
-		} // end if no connection
-
-		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id);
-		if (!LB_OK(rc))
-			return rc;
-
-		pconn->Wait_For_Response();
-
-		// check decoded value
-		auto res = pconn->results.Front().value();
-		if (res.get().error)
-		{
-			rc = LB_Make
-			(
-				LBAction::LB_FAIL,
-				LBDomain::LB_DOM_NEO4J
-			);
-		} // end if failed
-
-		pconn->latencies.Record_Latency
-		(
-			std::chrono::high_resolution_clock::now() -
-			res.get().start_clock
-		);
-
-		return rc;
-	} // end Start_Session
-
-
     /**
 	 * @brief commits the current transaction with the given options. Options can include things like
 	 *  bookmarks, database name, tx timeout, tx metadata etc.
@@ -478,6 +508,10 @@ private:
 	NeoConnection* pconn;
 	NeoPool& pool;
 
+	int retry_count{ 0 };		// how many times we've retried a failed attempt
+
+	LockFreeQueue<RequestCommand> requests;		// query requests pending
+	LockFreeQueue<BoltResult> results;			// results pending 
 
 	// For debug builds, we can track the thread that owns this session to ensure thread safety.
     inline LBStatus FAIL() const

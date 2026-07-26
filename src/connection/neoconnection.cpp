@@ -59,7 +59,7 @@ NeoConnection::~NeoConnection() {}
  *  SUCCESS message and we are good to go. On LB_Retry the function attempts reconnection
  *	predefined number of times before giving up.
  *
- * @return LB_OK on success. LB_FAIL on terminal fail.
+ * @return LB_OK on success. LB_RETRY on sys/ssl fail and LB_FAIL on terminal fail.
  */
 LBStatus NeoConnection::Connect_Neo4j(const int epfd_, const int id)
 {
@@ -145,7 +145,7 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
 
         // now do decode it
         rc = Decode_One(task[0]);
-        task[0].view.offset += aux;
+        task->view.offset += aux;
         LBAction action = LB_Action(rc);
 
         // LB_OK = done
@@ -154,6 +154,12 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
         // LB_ROUTE = route error, refresh route table
         // LB_FAIL = terminal oops.
         // All domains are from Neo4j except for enqueue errors which are from driver domain.
+        
+        if (action == LBAction::LB_OK || action == LBAction::LB_FAIL)
+        {
+            task->_cb(task->result);
+            task = Get_Next_Task(task->view.offset, total_decode - decoded);
+        } // end if done either ways
 
    //     switch (action)
    //     {
@@ -836,7 +842,8 @@ LBStatus NeoConnection::Negotiate_Version()
  *	successful connection, it negotiates the bolt protocol version with the peer.
  *	It then registers it to epoll for it to actively poll read events. It finally
  *	sets the client id from the parameter passed via Set_ClientID() memeber.
- *
+ *  The function also makes adds the current task to the task queue.
+ * 
  * @param epfd epoll descriptor id
  * @param pobj pointer to object i.e. cell
  * @param id application defined connection identifer
@@ -1404,11 +1411,7 @@ LBStatus NeoConnection::Success_Hello(DecoderTask& task)
         );
     } // end if
 
-    task.result.done = true;  // not gonna care about meta
-	task._cb(task.result);  // invoke callback
-	tasks.Dequeue();  // dequeue the task
-
-    //task = Get_Next_Task(task.view.offset, task.view.size);
+    task.result.done = true;    // not gonna care about meta
     return LB_Make();
 } // end Success_Hello
 
