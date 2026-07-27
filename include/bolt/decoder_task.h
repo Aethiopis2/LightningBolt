@@ -131,11 +131,12 @@ struct DecoderTask
     TaskState state;        // current state of the query
     BoltView view;          // view into the buffer for this query
 	BoltResult result;      // decoded result for this query
-    std::function<void(BoltResult&)> _cb = nullptr;       // async callback into the session
+    bool done{ false };         // when true, streaming is done and task can be dequeued.
+    std::function<void(LBStatus, BoltResult&)> cb = nullptr;       // async callback into the session
 
     DecoderTask() = default;
     DecoderTask(TaskState s) : state(s) {}
-    DecoderTask(TaskState s, std::function<void(BoltResult&)> cb) : state(s), _cb(cb) {}
+    DecoderTask(TaskState s, std::function<void(LBStatus, BoltResult&)> fn) : state(s), cb(fn) {}
     DecoderTask(const DecoderTask&) = delete;
     DecoderTask(DecoderTask&&) = default;
 

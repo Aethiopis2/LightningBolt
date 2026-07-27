@@ -74,24 +74,24 @@ public:
         const std::string& urls, BoltValue* pauth, BoltValue* pextras);
     ~NeoConnection();
 
-    LBStatus Connect_Neo4j(const int epfd_, const int id);
+    LBStatus Connect_Neo4j(const int epfd_, const int id, std::function<void(LBStatus, BoltResult&)> cb);
     LBStatus Decode_Response(u8* ptr, const size_t bytes);
 
 	LBStatus Run(const char* cypher, BoltValue& params, BoltValue& extras, 
 		const int n = -1,
-        std::function<void(BoltResult&)> cb);
-    LBStatus Begin(BoltValue& extra, std::function<void(BoltResult&)> cb);
-    LBStatus Commit(BoltValue& extra, std::function<void(BoltResult&)> cb);
-    LBStatus Rollback(BoltValue& extra, std::function<void(BoltResult&)> cb);
-    LBStatus Pull(const int n, std::function<void(BoltResult&)> cb);
-    LBStatus Discard(const int n, std::function<void(BoltResult&)> cb);
+        std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Begin(BoltValue& extra, std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Commit(BoltValue& extra, std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Rollback(BoltValue& extra, std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Pull(const int n, std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Discard(const int n, std::function<void(LBStatus, BoltResult&)> cb);
     LBStatus Route(BoltValue& routes, BoltValue& bookmark, const std::string db, BoltValue& extra,
-        std::function<void(BoltResult&)> cb);
-    LBStatus Reset(std::function<void(BoltResult&)> cb);
-    LBStatus Telemetry(const int n, std::function<void(BoltResult&)> cb);
-    LBStatus Logoff(std::function<void(BoltResult&)> cb);
+        std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Reset(std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Telemetry(const int n, std::function<void(LBStatus, BoltResult&)> cb);
+    LBStatus Logoff(std::function<void(LBStatus, BoltResult&)> cb);
     LBStatus Goodbye();
-    LBStatus Ack_Failure(std::function<void(BoltResult&)> cb);
+    LBStatus Ack_Failure(std::function<void(LBStatus, BoltResult&)> cb);
 
     void Terminate();
     void Set_Host_Address(const std::string& host, const std::string& port);
@@ -153,7 +153,7 @@ private:
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
     LBStatus Flush();
     LBStatus Encode_And_Flush(TaskState s, BoltMessage& v,
-        std::function<void(BoltResult&)> cb);
+        std::function<void(LBStatus, BoltResult&)> cb);
     LBStatus Enqueue_Task(TaskState s);
     LBStatus Retry_Encode(BoltMessage&);
 
@@ -181,7 +181,7 @@ private:
         const std::string& database);
     BoltMessage Route_Legacy(const BoltValue& routing);
 
-	DecoderTask* Get_Next_Task(const size_t offset, const size_t size);
+	DecoderTask* Get_Next_Task(const size_t start, const size_t size);
 
     // success handler table
     using Success_Fn = LBStatus (NeoConnection::*)(DecoderTask&);

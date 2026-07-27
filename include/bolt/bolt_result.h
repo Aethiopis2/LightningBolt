@@ -36,7 +36,6 @@ struct BoltResult
     size_t message_count{ 0 };  // count of messages contained within records
 	size_t total_bytes{ 0 };    // total bytes consumed by the records
     size_t start_offset{ 0 };   // start of message offset in the pool
-    bool done{ false };         // when true, streaming is done and summary is ready.
     bool error{ false };        // determines if this stream is a failed one
     int client_id = 0;          // debugging purposes, to id threads.
 

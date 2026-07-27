@@ -270,7 +270,29 @@ public:
 			pconn = pool.Acquire();
 		} // end if no connection
 
-		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id);
+		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id,
+			[&](LBStatus ret, BoltResult& res) {
+				if (res.error)
+				{
+					if (!results.Enqueue(std::move(res)))
+					{
+						return LB_Make(
+							LBAction::LB_FAIL,
+							LBDomain::LB_DOM_DRIVER,
+							LBCode::LB_CODE_STATE_QUEUE_MEM
+						);
+					} // end if no enqueue
+
+					rc = LB_Make
+					(
+						LBAction::LB_FAIL,
+						LBDomain::LB_DOM_NEO4J
+					);
+				} // end if error
+				else rc = LB_Make();
+			});
+
+		pconn->Wait_For_Response();
 		if (!LB_OK(rc))
 		{
 			LBAction action = LB_Action(rc);
@@ -286,36 +308,38 @@ public:
 				std::this_thread::sleep_for(std::chrono::milliseconds(
 					(retry_count - 1) * 500));
 
-				rc = pconn->Connect_Neo4j(epfd, client_id);
+				rc = pconn->Connect_Neo4j(epfd, client_id,
+					[&](LBStatus ret, BoltResult& res) {
+						if (res.error)
+						{
+							if (!results.Enqueue(std::move(res)))
+							{
+								return LB_Make(
+									LBAction::LB_FAIL,
+									LBDomain::LB_DOM_DRIVER,
+									LBCode::LB_CODE_STATE_QUEUE_MEM
+								);
+							} // end if no enqueue
+
+							rc = LB_Make
+							(
+								LBAction::LB_FAIL,
+								LBDomain::LB_DOM_NEO4J
+							);
+						} // end if error
+						else rc = LB_Make();
+					});
+
 				action = LB_Action(rc);
 			} // end while
 
 			// at the end of the day..
 			retry_count = 0;
-			if (!LB_OK(rc)) return rc;
 		} // end if failed to connect
-
-		pconn->Wait_For_Response();
-
-		// check decoded value
-		auto res = pconn->results.Front().value();
-		if (res.get().error)
-		{
-			rc = LB_Make
-			(
-				LBAction::LB_FAIL,
-				LBDomain::LB_DOM_NEO4J
-			);
-		} // end if failed
-
-		pconn->latencies.Record_Latency
-		(
-			std::chrono::high_resolution_clock::now() -
-			res.get().start_clock
-		);
 
 		return rc;
 	} // end Start_Session
+
 
     LBStatus Run_Async(
 		std::function<void(BoltResult&)> cb,
@@ -337,12 +361,15 @@ public:
 				Detect_Query_Mode(query)) : Detect_Query_Mode(query);
 		cmd.cb = std::move(cb);
 
-		if (!pconn->commands.Enqueue(std::move(cmd)))
+		if (!requests.Enqueue(std::move(cmd)))
 		{
 			return FAIL();
 		} // end if enqueued
 
-		return pconn->Run(pconn->commands.Front()->get());
+		return pconn->Run(query, cmd.param, cmd.extra, cmd.n,
+			[&](LBStatus ret, BoltResult& res) {
+				dfgdfg
+			});
 	} // end Run
 
 

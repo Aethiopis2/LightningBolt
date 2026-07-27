@@ -150,7 +150,7 @@ LBStatus NeoDriver::Execute_Async(std::function<void(BoltResult&)> cb,
 	{
 		if (cb)
 		{
-			auto res = ctx.session.pconn->results.Dequeue();
+			auto res = ctx.session.results.Dequeue();
 			cb(res.value());
 		} // end if callback
 		else last_error = ctx.session.Get_Last_Error();

@@ -61,17 +61,29 @@ NeoConnection::~NeoConnection() {}
  *
  * @return LB_OK on success. LB_RETRY on sys/ssl fail and LB_FAIL on terminal fail.
  */
-LBStatus NeoConnection::Connect_Neo4j(const int epfd_, const int id)
+LBStatus NeoConnection::Connect_Neo4j(const int epfd_, const int id, 
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     // trivially reject false calls
     if (Is_Open()) return LB_Make();
 
     epfd = epfd_;
+
+    // push in some tasks before starting up
+    DecoderTask dt{ TaskState::Hello, cb };
+    if (!tasks.Enqueue(std::move(dt)))
+    {
+        return LB_Make(
+            LBAction::LB_FAIL,
+            LBDomain::LB_DOM_DRIVER,
+            LBCode::LB_CODE_STATE_QUEUE_MEM
+        );
+    } // end if no encoded
+
     LBStatus rc = Handshake(epfd, this, id);
     if (!LB_OK(rc)) return rc;
 
     Add_Sync_Count();
-    TaskState state = tasks.Front()->get().state;
     if (supported_version.Get_Version() >= 5.1)       // use version 6/5 hello
         rc = Send_Hellov5();
     else  // version 4 and below 
@@ -155,11 +167,27 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
         // LB_FAIL = terminal oops.
         // All domains are from Neo4j except for enqueue errors which are from driver domain.
         
-        if (action == LBAction::LB_OK || action == LBAction::LB_FAIL)
+        switch (action)
         {
-            task->_cb(task->result);
+        case LBAction::LB_OK:
+        case LBAction::LB_FAIL:
+        {
+            if (task->done) task = Get_Next_Task(task->view.offset, total_decode - decoded);
+        } break;
+
+        case LBAction::LB_RESET:
+        {
+            rc = Reset(task->cb);
             task = Get_Next_Task(task->view.offset, total_decode - decoded);
-        } // end if done either ways
+            if (!LB_OK(rc)) return rc;
+        } break;
+
+        case LBAction::LB_IGNORE:
+        {
+            task = Get_Next_Task(task->view.offset, total_decode - decoded);
+        } break;
+
+        } // end switch
 
    //     switch (action)
    //     {
@@ -321,7 +349,7 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
  * @return 0 on success and -2 on application error
  */
 LBStatus NeoConnection::Run(const char* cypher, BoltValue& param, BoltValue& extras, 
-    const int n, std::function<void(BoltResult&)> cb)
+    const int n, std::function<void(LBStatus, BoltResult&)> cb)
 {
     // protect pool
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -368,7 +396,7 @@ LBStatus NeoConnection::Run(const char* cypher, BoltValue& param, BoltValue& ext
  * @return LB_OK status on success or LB_FAIL on send fails
  */
 LBStatus NeoConnection::Begin(BoltValue& extra, 
-    std::function<void(BoltResult&)> cb)
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     if (tran_count++ != 0)
         return 0;       // LB_OK
@@ -398,7 +426,7 @@ LBStatus NeoConnection::Begin(BoltValue& extra,
  * @return LB_OK on success. LB_FAIL on failures.
  */
 LBStatus NeoConnection::Commit(BoltValue& extra, 
-    std::function<void(BoltResult&)> cb)
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     if (tran_count > 0)
     {
@@ -432,7 +460,7 @@ LBStatus NeoConnection::Commit(BoltValue& extra,
  * @return LB_OK on success. Alas LB_FAIL on flush error
  */
 LBStatus NeoConnection::Rollback(BoltValue& extra,
-    std::function<void(BoltResult&)> cb)
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     if (tran_count > 0)
     {
@@ -464,7 +492,7 @@ LBStatus NeoConnection::Rollback(BoltValue& extra,
 * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
 */
 LBStatus NeoConnection::Pull(const int n, 
-    std::function<void(BoltResult&)> cb)
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     Encode_Pull(n);
     if (!tasks.Enqueue({ TaskState::Pull, cb }))
@@ -483,7 +511,7 @@ LBStatus NeoConnection::Pull(const int n,
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Discard(const int n, std::function<void(BoltResult&)> cb)
+LBStatus NeoConnection::Discard(const int n, std::function<void(LBStatus, BoltResult&)> cb)
 {
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage discard
@@ -516,7 +544,7 @@ LBStatus NeoConnection::Discard(const int n, std::function<void(BoltResult&)> cb
  */
 LBStatus NeoConnection::Route(BoltValue& routes, BoltValue& bookmark, 
     const std::string db, BoltValue& extra,
-    std::function<void(BoltResult&)> cb)
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     // keep track of pool, from here on we allocate from it
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -558,7 +586,7 @@ LBStatus NeoConnection::Route(BoltValue& routes, BoltValue& bookmark,
  * 
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Reset(std::function<void(BoltResult&)> cb)
+LBStatus NeoConnection::Reset(std::function<void(LBStatus, BoltResult&)> cb)
 {
     // memorize the last pool offset to cleanup later
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -579,7 +607,7 @@ LBStatus NeoConnection::Reset(std::function<void(BoltResult&)> cb)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Telemetry(const int api, std::function<void(BoltResult&)> cb)
+LBStatus NeoConnection::Telemetry(const int api, std::function<void(LBStatus, BoltResult&)> cb)
 {
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
     BoltMessage tel(BoltValue(BOLT_TELEMETRY, { api }));
@@ -596,7 +624,7 @@ LBStatus NeoConnection::Telemetry(const int api, std::function<void(BoltResult&)
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Logoff(std::function<void(BoltResult&)> cb)
+LBStatus NeoConnection::Logoff(std::function<void(LBStatus, BoltResult&)> cb)
 {
     LBStatus rc;
 
@@ -639,7 +667,7 @@ LBStatus NeoConnection::Goodbye()
  *
  * @return LB_OK on success. Alas LB_FAIL/LB_RETRY on flush error
  */
-LBStatus NeoConnection::Ack_Failure(std::function<void(BoltResult&)> cb)
+LBStatus NeoConnection::Ack_Failure(std::function<void(LBStatus, BoltResult&)> cb)
 {
     // memorize last pool offset to cleanup later
     size_t offset = GetBoltPool<BoltValue>()->Get_Last_Offset();
@@ -856,11 +884,7 @@ LBStatus NeoConnection::Handshake(const int epfd, void* pobj, const int id)
     tasks.Clear();
     client_id = id;
 
-    // push in some tasks before starting up
-    LBStatus rc = Enqueue_Task({ TaskState::Hello });
-    if (!LB_OK(rc)) return rc;
-
-    rc = Connect();
+    LBStatus rc = Connect();
     if (!LB_OK(rc))
     {
         tasks.Dequeue();
@@ -1321,7 +1345,7 @@ LBStatus NeoConnection::Flush()
  * @return LB_0K status on success, alas LB_FAIL on failure.
  */
 LBStatus NeoConnection::Encode_And_Flush(TaskState s, BoltMessage& msg, 
-    std::function<void(BoltResult&)> cb)
+    std::function<void(LBStatus, BoltResult&)> cb)
 {
     LBStatus rc = encoder.Encode(msg);
     if (!LB_OK(rc))
@@ -1411,7 +1435,10 @@ LBStatus NeoConnection::Success_Hello(DecoderTask& task)
         );
     } // end if
 
-    task.result.done = true;    // not gonna care about meta
+    task.done = true;
+    task.cb(LB_Make(), task.result);
+    Sub_Sync_Count();
+
     return LB_Make();
 } // end Success_Hello
 
@@ -1441,10 +1468,35 @@ LBStatus NeoConnection::Success_Run(DecoderTask& task)
     (
         LBAction::LB_HASMORE, 
         LBDomain::LB_DOM_NEO4J,
-        LBCode::LB_CODE_NONE, 
-        bytes
+        LBCode::LB_CODE_NONE
     );
 } // end Success_Run
+
+
+/**
+ * @brief this is called immidiately after Successful Run, and it simply sets the
+ *  member view to point at the next bytes and sets has_more to false to make
+ *  sure the recv loop won't run again unless required through Fecth(). It updates
+ *  the state to streaming to indicate driver is now consuming buffer.
+ *
+ * @param task  current task including view to hold streaming results from buffer
+ *
+ * @return LB_OK_INFO containing number of bytes to skip
+ */
+LBStatus NeoConnection::Handle_Record(DecoderTask& task)
+{
+    task.state = TaskState::Record;
+    task.result.message_count++;
+    task.result.total_bytes += current_msg_len;
+
+    return LB_Make
+    (
+        LBAction::LB_HASMORE,
+        LBDomain::LB_DOM_NEO4J,
+        LBCode::LB_CODE_NONE,
+        current_msg_len
+    );
+} // end Success_Record
 
 
 /**
@@ -1496,7 +1548,7 @@ LBStatus NeoConnection::Success_Reset(DecoderTask& task)
         )
     {
 		task.result = std::move(last_err);
-        task.result.done = true;
+        task.done = true;
 
         if (retry_count++ < MAX_RETRY)
         {
@@ -1551,32 +1603,6 @@ LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 
 
 /**
- * @brief this is called immidiately after Successful Run, and it simply sets the
- *  member view to point at the next bytes and sets has_more to false to make
- *  sure the recv loop won't run again unless required through Fecth(). It updates
- *  the state to streaming to indicate driver is now consuming buffer.
- *
- * @param task  current task including view to hold streaming results from buffer
- *
- * @return LB_OK_INFO containing number of bytes to skip
- */
-LBStatus NeoConnection::Handle_Record(DecoderTask& task)
-{
-    task.state = TaskState::Record;
-    task.result.message_count++;
-	task.result.total_bytes += current_msg_len;
-
-    return LB_Make
-    (
-        LBAction::LB_HASMORE, 
-        LBDomain::LB_DOM_NEO4J,
-        LBCode::LB_CODE_NONE, 
-        current_msg_len
-    );
-} // end Success_Record
-
-
-/**
  * @brief decodes the stream containing the error, sets the connection
  *  error string and takes appropriate action based on the current state.
  *
@@ -1589,24 +1615,27 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
     LBAction action;
     LBDomain domain;
 
-	
     last_err.pdec = &decoder;
     last_err.start_offset = (task.view.start + task.view.offset);
 	last_err.message_count++;
 	last_err.error = true;
 
     TaskState ts = task.state;
-
     switch (ts)
     {
     case TaskState::Run:
         action = LBAction::LB_HASMORE;      // expects a pull ignored
+        task.state = TaskState::Ignored;
         break;
 
     default:
-		last_err.done = true;
+		task.done = true;
         action = LBAction::LB_FAIL;
         domain = LBDomain::LB_DOM_NEO4J;
+        task.cb(LB_Make(action, domain), last_err);
+
+        if (sync_count.load() > 1) 
+            Sub_Sync_Count();
         break;
     }; // end switch
 
@@ -1632,13 +1661,16 @@ LBStatus NeoConnection::Handle_Ignored(DecoderTask& task)
     // process only on the final task
     if (tasks.Size() > 1)
     {
+        LBAction action = LBAction::LB_IGNORE;
         if (task.state != TaskState::Ignored)
+        {
             task.state = TaskState::Ignored;
-		else tasks.Dequeue();   // discard the failed task, and reset the connection
+            action = LBAction::LB_HASMORE;
+        } // end if wasn't ignored before
 
         return LB_Make
         (
-            LBAction::LB_HASMORE,
+            action,
             LBDomain::LB_DOM_NEO4J,
             LBCode::LB_CODE_NONE
         );
@@ -1794,7 +1826,7 @@ LBStatus NeoConnection::Retry_Encode(BoltMessage& dat)
 } // end Retry_Encode
 
 
-DecoderTask* NeoConnection::Get_Next_Task(const size_t offset, const size_t size)
+DecoderTask* NeoConnection::Get_Next_Task(const size_t start, const size_t size)
 {
     DecoderTask* ptask = nullptr;
 
@@ -1802,7 +1834,7 @@ DecoderTask* NeoConnection::Get_Next_Task(const size_t offset, const size_t size
     if (!tasks.Is_Empty())
     {
         ptask = &tasks.Front()->get();
-        ptask->view.start = offset;	    /// set the cursor to the start of the buffer
+        ptask->view.start = start;	    /// set the cursor to the start of the buffer
         ptask->view.size = size;	    // set the size to the number of bytes received
         ptask->view.offset = 0;			            // set the offset to 0 for the start of the buffer
 	} // end if not empty
