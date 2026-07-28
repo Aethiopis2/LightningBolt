@@ -109,7 +109,6 @@ private:
     int current_msg_len;    // length of the current message being decoded; used for partial decoding
     int unconsumed_count;   // prevents infinite loops due to Compact and Consume stalls
     int leftover_bytes;     // leftover bytes from previous decode
-	int retry_count;        // number of retries attempted for connection
 
 
     bool recv_paused;               // have we paused recv because of mem issues?

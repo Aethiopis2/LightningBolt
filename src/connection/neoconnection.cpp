@@ -31,7 +31,6 @@ NeoConnection::NeoConnection(bool ssl_enabled,
     current_msg_len = 0;
     unconsumed_count = 0;
 	leftover_bytes = 0;
-	retry_count = 0;
 
     is_open = false;
     recv_paused = false;
@@ -171,21 +170,18 @@ LBStatus NeoConnection::Decode_Response(u8* ptr, const size_t bytes)
         {
         case LBAction::LB_OK:
         case LBAction::LB_FAIL:
+        case LBAction::LB_IGNORE:
         {
             if (task->done) task = Get_Next_Task(task->view.offset, total_decode - decoded);
         } break;
 
         case LBAction::LB_RESET:
         {
-            rc = Reset(task->cb);
-            task = Get_Next_Task(task->view.offset, total_decode - decoded);
+            auto t = tasks.Dequeue().value();
+            rc = Reset(t.cb);
             if (!LB_OK(rc)) return rc;
         } break;
 
-        case LBAction::LB_IGNORE:
-        {
-            task = Get_Next_Task(task->view.offset, total_decode - decoded);
-        } break;
 
         } // end switch
 
@@ -1529,7 +1525,7 @@ LBStatus NeoConnection::Success_Record(DecoderTask& task)
         );
     } // end if record done
 
-    task.result.done = true;
+    task.done = true;
     return LBOK_INFO(bytes);  // should be LB_OK_INFO
 } // end Success_Record
 
@@ -1543,62 +1539,38 @@ LBStatus NeoConnection::Success_Record(DecoderTask& task)
  */
 LBStatus NeoConnection::Success_Reset(DecoderTask& task)
 {
+    LBStatus rc = 0;
+
     if (
         !std::string("Neo.TransientError.General.DatabaseUnavailable").compare(last_err.begin().bv(0)["neo4j_code"].ToString())
         )
     {
-		task.result = std::move(last_err);
-        task.done = true;
-
-        if (retry_count++ < MAX_RETRY)
-        {
-			const int wait_time = 100 * retry_count;
-#ifdef _DEBUG
-            Utils::Print("Retry %d: retrying after %d milliseconds", retry_count, wait_time);
-#endif
-            std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
-            return LB_Make
-            (
-                LBAction::LB_RETRY,
-                LBDomain::LB_DOM_NEO4J,
-                LBCode::LB_CODE_NONE,
-                task.view.size
-            );
-		} // end if retry count
-
-		retry_count = 0;   // reset retry count
-        return LB_Make();
-        /*return LB_Make
+        rc = LB_Make
         (
             LBAction::LB_RETRY,
             LBDomain::LB_DOM_NEO4J,
-            LBCode::LB_CODE_NONE,
-            task.view.size
-        );*/
+            LBCode::LB_CODE_NONE
+        );
     }
     else if (
         !std::string("Neo.ClientError.General.ForbiddenOnReadOnlyDatabase").compare(last_err.begin().bv(0)["neo4j_code"].ToString()) ||
         !std::string("Neo.ClientError.Cluster.NotALeader").compare(last_err.begin().bv(0)["neo4j_code"].ToString())
         )
     {
-        {
-			task.result = std::move(last_err);
-            task.result.done = true;
-            return LB_Make
-            (
-                LBAction::LB_REROUTE,
-                LBDomain::LB_DOM_NEO4J,
-                LBCode::LB_CODE_NONE,
-                task.view.size
-            );
-        }
+        rc = LB_Make
+        (
+            LBAction::LB_REROUTE,
+            LBDomain::LB_DOM_NEO4J,
+            LBCode::LB_CODE_NONE
+        );
     }
     
     // whatever error had been reset
     task.result = std::move(last_err);
-    task.result.done = true;
+    task.done = true;
+    task.cb(rc, task.result);
 
-    return LB_Make();
+    return rc;
 } // end Success_Reset
 
 
@@ -1659,18 +1631,23 @@ LBStatus NeoConnection::Handle_Failure(DecoderTask& task)
 LBStatus NeoConnection::Handle_Ignored(DecoderTask& task)
 {
     // process only on the final task
-    if (tasks.Size() > 1)
+    task.done;
+    if (task.state == TaskState::Run)
     {
-        LBAction action = LBAction::LB_IGNORE;
-        if (task.state != TaskState::Ignored)
-        {
-            task.state = TaskState::Ignored;
-            action = LBAction::LB_HASMORE;
-        } // end if wasn't ignored before
-
+        task.state = TaskState::Ignored;
         return LB_Make
         (
-            action,
+            LBAction::LB_HASMORE,
+            LBDomain::LB_DOM_NEO4J,
+            LBCode::LB_CODE_NONE
+        );
+    } // end if
+
+    if (tasks.Size() > 1)
+    {
+        return LB_Make
+        (
+            LBAction::LB_IGNORE,
             LBDomain::LB_DOM_NEO4J,
             LBCode::LB_CODE_NONE
         );
