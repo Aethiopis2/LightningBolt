@@ -78,7 +78,7 @@ public:
     LBStatus Decode_Response(u8* ptr, const size_t bytes);
 
 	LBStatus Run(const char* cypher, BoltValue& params, BoltValue& extras, 
-		const int n = -1,
+		const int n,
         std::function<void(LBStatus, BoltResult&)> cb);
     LBStatus Begin(BoltValue& extra, std::function<void(LBStatus, BoltResult&)> cb);
     LBStatus Commit(BoltValue& extra, std::function<void(LBStatus, BoltResult&)> cb);
@@ -148,7 +148,7 @@ private:
 
     LBStatus Poll_Writable();
     LBStatus Poll_Readable();
-    LBStatus Decode_One(DecoderTask& task);
+    void Decode_One(DecoderTask*& ptask);
     LBStatus Can_Decode(u8* view, const u32 bytes_remain);
     LBStatus Flush();
     LBStatus Encode_And_Flush(TaskState s, BoltMessage& v,
@@ -157,15 +157,15 @@ private:
     LBStatus Retry_Encode(BoltMessage&);
 
     // state based handlers
-    LBStatus Success_None(DecoderTask& task);
-    LBStatus Success_Hello(DecoderTask& task);
-    LBStatus Success_Run(DecoderTask& task);
-    LBStatus Success_Record(DecoderTask& task);
-    LBStatus Success_Reset(DecoderTask& task);
+    void Success_None(DecoderTask*& ptask);
+    void Success_Hello(DecoderTask*& ptask);
+    void Success_Run(DecoderTask*& ptask);
+    void Success_Record(DecoderTask*& ptask);
+    void Success_Reset(DecoderTask*& ptask);
 
-    LBStatus Handle_Record(DecoderTask& task);
-    LBStatus Handle_Failure(DecoderTask& task);
-    LBStatus Handle_Ignored(DecoderTask& task);
+    void Handle_Record(DecoderTask*& ptask);
+    void Handle_Failure(DecoderTask*& ptask);
+    void Handle_Ignored(DecoderTask*& ptask);
 
     void Encode_Pull(const int n);
     void Add_Sync_Count();
@@ -183,7 +183,7 @@ private:
 	DecoderTask* Get_Next_Task(const size_t start, const size_t size);
 
     // success handler table
-    using Success_Fn = LBStatus (NeoConnection::*)(DecoderTask&);
+    using Success_Fn = void (NeoConnection::*)(DecoderTask*&);
     Success_Fn success_handler[QUERY_STATES]
     {
         &NeoConnection::Success_None,       // TaskState::None - do nothing program or is done

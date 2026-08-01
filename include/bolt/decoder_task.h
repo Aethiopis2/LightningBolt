@@ -115,9 +115,11 @@ struct RequestCommand
  */
 struct BoltView
 {
-	s64 start = -1;          // the start of the view into the buffer
-    u64 offset = 0;         // the cursor offset
+	size_t start = -1;          // the start of the view into the buffer
+    size_t offset = 0;         // the cursor offset
     size_t size = 0;        // the size of view into buffer
+
+    size_t next_offset = 0;
 };
 
 

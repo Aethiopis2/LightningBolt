@@ -227,12 +227,15 @@ class NeoDriver;
 
 
 
+
+
 //===============================================================================|
 //          CLASS
 //===============================================================================|
 class NeoSession
 {
 	friend class NeoDriver;
+    
 
 public:
 
@@ -367,9 +370,7 @@ public:
 		} // end if enqueued
 
 		return pconn->Run(query, cmd.param, cmd.extra, cmd.n,
-			[&](LBStatus ret, BoltResult& res) {
-				dfgdfg
-			});
+			LB_Handle_Status);
 	} // end Run
 
 
@@ -406,18 +407,19 @@ public:
 		// wait for at least one full message
 		pconn->Wait_For_Response();
 
-		auto& results = pconn->results.Front()->get();
+		auto& r = results.Front()->get();
 
-		result = std::move(results);
+		result = std::move(r);
 		pconn->latencies.Record_Latency
 		(
 			std::chrono::high_resolution_clock::now() -
 			result.start_clock
 		);
-		if (result.done)
+
+		if (!results.Is_Empty()) //(result.done)
 		{
-			pconn->results.Dequeue();
-			return LB_Make();
+			results.Dequeue();
+			//return LB_Make();
 		} // end if done
 
 		return LB_Make(LBAction::LB_HASMORE, LBDomain::LB_DOM_NEO4J);
@@ -439,7 +441,13 @@ public:
 		cmd.extra = std::move(options);
 		cmd.mode = QueryMode::Read;
 		cmd.type = RequestCmdType::Begin;
-		return pconn ? pconn->Begin(cmd) : FAIL();
+
+		if (!requests.Enqueue(std::move(cmd)))
+		{
+			return FAIL();
+		} // end if enqueued
+
+		return pconn ? pconn->Begin(cmd.extra, LB_Handle_Status) : FAIL();
     } // end Begin
 
 
@@ -459,7 +467,12 @@ public:
         cmd.mode = QueryMode::Read;
         cmd.type = RequestCmdType::Commit;
 
-        return pconn ? pconn->Commit(cmd) : FAIL();
+		if (!requests.Enqueue(std::move(cmd)))
+		{
+			return FAIL();
+		} // end if enqueued
+
+        return pconn ? pconn->Commit(cmd.extra, LB_Handle_Status) : FAIL();
 	} // end Commit
 
 
@@ -477,8 +490,12 @@ public:
         cmd.extra = std::move(options);
         cmd.mode = QueryMode::Read;
         cmd.type = RequestCmdType::Run;
+		if (!requests.Enqueue(std::move(cmd)))
+		{
+			return FAIL();
+		} // end if enqueued
 
-        return pconn ? pconn->Rollback(cmd) : FAIL();
+        return pconn ? pconn->Rollback(cmd.extra, LB_Handle_Status) : FAIL();
 	} // end Rollback
 
 
@@ -499,8 +516,7 @@ public:
 
 		if (pconn->supported_version.Get_Version() >= 5.1)
 		{
-			RequestCommand cmd({ RequestCmdType::Logoff });
-			pconn->Logoff(cmd);
+			pconn->Logoff(LB_Handle_Status);
 		} // end if ver 5.1
 
 		// drain all requests before terminating
@@ -540,6 +556,45 @@ private:
 	LockFreeQueue<RequestCommand> requests;		// query requests pending
 	LockFreeQueue<BoltResult> results;			// results pending 
 
+	LBStatus Execute_Command()
+	{
+		LBStatus rc;
+		for (size_t i = 0; i < requests.Size(); i++)
+		{
+			auto& cmd = requests[i].value().get();
+			switch (cmd.type)
+			{
+			case RequestCmdType::Run:
+				rc = pconn->Run(cmd.cypher, cmd.param, cmd.extra, cmd.n, LB_Handle_Status);
+				if (!LB_OK(rc)) return rc;
+				break;
+
+			case RequestCmdType::Begin:
+				rc = pconn->Begin(cmd.extra, LB_Handle_Status);
+				if (!LB_OK(rc)) return rc;
+				break;
+
+			case RequestCmdType::Commit:
+				rc = pconn->Commit(cmd.extra, LB_Handle_Status);
+				if (!LB_OK(rc)) return rc;
+				break;
+
+			case RequestCmdType::Rollback:
+				rc = pconn->Rollback(cmd.extra, LB_Handle_Status);
+				if (!LB_OK(rc)) return rc;
+				break;
+
+			case RequestCmdType::Logoff:
+				rc = pconn->Logoff(LB_Handle_Status);
+				if (!LB_OK(rc)) return rc;
+				break;
+			} // end cmd.type
+		} // end for 
+
+		return LB_Make();
+	} // end Execute_Command
+
+
 	// For debug builds, we can track the thread that owns this session to ensure thread safety.
     inline LBStatus FAIL() const
     {
@@ -555,5 +610,35 @@ private:
 #else
     inline void CHECK_THREAD() const {}
 #endif
+
+
+	std::function<void(LBStatus, BoltResult&)> LB_Handle_Status = [&](LBStatus ret, BoltResult& res)
+		{
+			LBAction action = LB_Action(ret);
+
+			// LB_OK = done
+			// LB_HASMORE = not done partial streaming possible
+			// LB_RETRY = failed request, retry
+			// LB_ROUTE = route error, refresh route table
+			// LB_FAIL = terminal oops.
+			// All domains are from Neo4j except for enqueue errors which are from driver domain.
+
+			switch (action)
+			{
+			case LBAction::LB_OK:
+			case LBAction::LB_FAIL:
+			{
+				auto cmd = requests.Dequeue().value();
+				if (cmd.cb)
+					cmd.cb(res);
+				else
+				{
+					results.Enqueue(std::move(res));
+					pconn->Sub_Sync_Count();
+				}
+			} break;
+
+			} // end switch
+		}; // end LB_Handle_Status
 
 };

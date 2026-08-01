@@ -176,7 +176,7 @@ constexpr LBStatus LBOK_INFO(u32 aux)
 } // end LB_OK_INFO
 
 
-LBStatus LB_Handle_Status(LBStatus status, NeoConnection* pcell);
+//LBStatus LB_Handle_Status(LBStatus status, NeoConnection* pcell);
 std::string LB_Error_String(LBStatus status);
 
 

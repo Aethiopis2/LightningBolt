@@ -276,7 +276,7 @@ void NeoDriver::Poll_Loop(CoreContext& ctx)
 
 					// now begin decoding, if we have a full message
 					rc = pconn->Decode_Response(pconn->read_buf.Read_Ptr(), LB_Aux(rc));
-					if (pconn->results.Is_Empty() && pconn->tasks.Is_Empty())
+					if (pconn->tasks.Is_Empty())
 						pconn->read_buf.Reset();
 				} // end while
 			} // end if readable

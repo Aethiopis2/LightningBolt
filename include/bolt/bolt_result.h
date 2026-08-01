@@ -78,7 +78,7 @@ struct BoltResult
         pdec = other.pdec;
         fields = other.fields;
         summary = other.summary;
-        done = other.done;
+        //done = other.done;
         error = other.error;
         client_id = other.client_id;
         message_count = other.message_count;
