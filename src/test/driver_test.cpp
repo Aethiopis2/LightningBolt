@@ -26,7 +26,7 @@ static std::atomic<int> records{ 0 };
 int main()
 {
     // 1. start driver
-	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", "tobby@melona"));
+	NeoDriver driver("bolt://localhost:7687", Auth::Basic("neo4j", ""));
     
 	BoltResult result;
     LBStatus rc = driver.Execute_Async(
