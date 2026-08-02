@@ -279,20 +279,16 @@ public:
 				{
 					if (!results.Enqueue(std::move(res)))
 					{
-						return LB_Make(
+						ret = LB_Make(
 							LBAction::LB_FAIL,
 							LBDomain::LB_DOM_DRIVER,
 							LBCode::LB_CODE_STATE_QUEUE_MEM
 						);
 					} // end if no enqueue
 
-					rc = LB_Make
-					(
-						LBAction::LB_FAIL,
-						LBDomain::LB_DOM_NEO4J
-					);
 				} // end if error
-				else rc = LB_Make();
+				
+				rc = ret;
 			});
 
 		pconn->Wait_For_Response();
@@ -317,20 +313,16 @@ public:
 						{
 							if (!results.Enqueue(std::move(res)))
 							{
-								return LB_Make(
+								ret = LB_Make(
 									LBAction::LB_FAIL,
 									LBDomain::LB_DOM_DRIVER,
 									LBCode::LB_CODE_STATE_QUEUE_MEM
 								);
 							} // end if no enqueue
 
-							rc = LB_Make
-							(
-								LBAction::LB_FAIL,
-								LBDomain::LB_DOM_NEO4J
-							);
 						} // end if error
-						else rc = LB_Make();
+
+						rc = ret;
 					});
 
 				action = LB_Action(rc);
@@ -364,13 +356,16 @@ public:
 				Detect_Query_Mode(query)) : Detect_Query_Mode(query);
 		cmd.cb = std::move(cb);
 
-		if (!requests.Enqueue(std::move(cmd)))
-		{
-			return FAIL();
-		} // end if enqueued
-
-		return pconn->Run(query, cmd.param, cmd.extra, cmd.n,
+		LBStatus rc = pconn->Run(cmd.cypher, cmd.param, cmd.extra, cmd.n,
 			LB_Handle_Status);
+
+		if (!LB_OK(rc))
+			return rc;
+
+		if (!requests.Enqueue(std::move(cmd)))
+			return FAIL();
+
+		return LB_Make();
 	} // end Run
 
 
@@ -615,6 +610,7 @@ private:
 	std::function<void(LBStatus, BoltResult&)> LB_Handle_Status = [&](LBStatus ret, BoltResult& res)
 		{
 			LBAction action = LB_Action(ret);
+			LBStatus rc;
 
 			// LB_OK = done
 			// LB_HASMORE = not done partial streaming possible
@@ -638,6 +634,55 @@ private:
 				}
 			} break;
 
+			case LBAction::LB_RESET:
+				rc = pconn->Reset(LB_Handle_Status);
+				if (!LB_OK(rc))
+					LB_Handle_Status(rc, res);
+				break;
+
+			case LBAction::LB_RETRY:
+			{
+				LBDomain domain = LB_Domain(ret);
+				if (retry_count++ < MAX_RETRY)
+				{
+					std::this_thread::sleep_for(std::chrono::milliseconds(
+						(retry_count - 1) * 500));
+#ifdef _DEBUG
+					Utils::Print("Retry attempt %d of %d times.",
+						retry_count, MAX_RETRY);
+#endif
+					if (domain == LBDomain::LB_DOM_SYS || domain == LBDomain::LB_DOM_SSL)
+					{
+						// driver error, maybe connection issue, try to reconnect
+						rc = pconn->Connect_Neo4j(pconn->epfd, pconn->client_id, LB_Handle_Status);
+						if (!LB_OK(rc))
+							LB_Handle_Status(rc, res);
+					} // end if domain
+
+					// retry the command
+					rc = Execute_Command();
+					if (!LB_OK(rc))
+						LB_Handle_Status(rc, res);
+				} // end if retry count
+				else
+				{
+					// too many retries, fail the command
+					retry_count = 0;
+					auto cmd = requests.Dequeue().value();
+					if (cmd.cb)
+						cmd.cb(res);
+					else
+					{
+						results.Enqueue(std::move(res));
+						pconn->Sub_Sync_Count();
+					} // end else
+
+					// continue with the next requests
+					rc = Execute_Command();
+					if (!LB_OK(rc))
+						LB_Handle_Status(rc, res);
+				} // end else
+			} break;
 			} // end switch
 		}; // end LB_Handle_Status
 

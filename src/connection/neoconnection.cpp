@@ -66,6 +66,7 @@ LBStatus NeoConnection::Connect_Neo4j(const int epfd_, const int id,
     // trivially reject false calls
     if (Is_Open()) return LB_Make();
 
+    tasks.Clear();
     epfd = epfd_;
 
     // push in some tasks before starting up
@@ -717,10 +718,8 @@ LBStatus NeoConnection::Negotiate_Version()
  */
 LBStatus NeoConnection::Handshake(const int epfd, void* pobj, const int id)
 {
-    tasks.Clear();
     client_id = id;
 
-    tasks.Enqueue({ TaskState::Hello });
     LBStatus rc = Connect();
     if (!LB_OK(rc))
     {
@@ -1239,8 +1238,11 @@ inline LBStatus NeoConnection::Enqueue_Task(TaskState s)
  */
 void NeoConnection::Success_None(DecoderTask*& ptask)
 {
-    ptask = Get_Next_Task(ptask->view.start + 
-        ptask->view.offset + ptask->view.size, 0);
+    ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+    ptask->view.offset = ptask->view.next_offset;
+
+    ptask = Get_Next_Task(ptask->view.start + ptask->view.offset, 
+        ptask->view.size);
 } // end if None
 
 
@@ -1273,8 +1275,11 @@ void NeoConnection::Success_Hello(DecoderTask*& ptask)
     } // end if
     
     ptask->cb(LB_Make(), ptask->result);
-    ptask = Get_Next_Task(ptask->view.offset + ptask->view.next_offset, ptask->view.size - 
-        (ptask->view.next_offset - ptask->view.offset));
+    ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+    ptask->view.offset = ptask->view.next_offset;
+
+    ptask = Get_Next_Task(ptask->view.start + ptask->view.offset,
+        ptask->view.size);
     Sub_Sync_Count();
 } // end Success_Hello
 
@@ -1301,6 +1306,8 @@ void NeoConnection::Success_Run(DecoderTask*& ptask)
     ptask->result.pdec = &decoder;
     ptask->result.start_offset = (ptask->view.start + ptask->view.offset + bytes);
 
+    ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+    ptask->view.offset = ptask->view.next_offset;
 } // end Success_Run
 
 
@@ -1317,6 +1324,9 @@ void NeoConnection::Handle_Record(DecoderTask*& ptask)
     ptask->state = TaskState::Record;
     ptask->result.message_count++;
     ptask->result.total_bytes += current_msg_len;
+
+    ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+    ptask->view.offset = ptask->view.next_offset;
 } // end Success_Record
 
 
@@ -1342,8 +1352,11 @@ void NeoConnection::Success_Record(DecoderTask*& ptask)
     if (Is_Record_Done(ptask->result.summary))
     {
 		ptask->cb(LB_Make(), ptask->result);
-        ptask = Get_Next_Task(ptask->view.start + ptask->view.offset + bytes, ptask->view.size -
-            (ptask->view.next_offset - ptask->view.offset));
+        ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+        ptask->view.offset = ptask->view.next_offset;
+
+        ptask = Get_Next_Task(ptask->view.start + ptask->view.offset,
+            ptask->view.size);
     } // end if record done
 
 } // end Success_Record
@@ -1383,9 +1396,12 @@ void NeoConnection::Success_Reset(DecoderTask*& ptask)
             LBCode::LB_CODE_NONE
 		), last_err);
     }
-    
-    // whatever error had been reset
-	ptask->cb(LB_Make(), last_err);
+    else
+    {
+        // whatever error had been reset
+        ptask->cb(LB_Make(), last_err);
+    } // end else whatever
+
     ptask = Get_Next_Task(ptask->view.start + ptask->view.offset + ptask->view.next_offset, ptask->view.size -
         (ptask->view.next_offset - ptask->view.offset));
 } // end Success_Reset
@@ -1413,17 +1429,18 @@ void NeoConnection::Handle_Failure(DecoderTask*& ptask)
     case TaskState::Run:
         action = LBAction::LB_HASMORE;      // expects a pull ignored
         ptask->state = TaskState::Ignored;
+        ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+        ptask->view.offset = ptask->view.next_offset;
         break;
 
     default:
         action = LBAction::LB_FAIL;
         domain = LBDomain::LB_DOM_NEO4J;
-        ptask->done = true;
         ptask->cb(LB_Make(action, domain), last_err);
         ptask = Get_Next_Task(last_err.start_offset + ptask->view.next_offset, ptask->view.size - 
             (ptask->view.next_offset - ptask->view.offset));
 
-        if (sync_count.load() > 1) 
+        if (sync_count.load() >= 1) 
             Sub_Sync_Count();
         break;
     }; // end switch
