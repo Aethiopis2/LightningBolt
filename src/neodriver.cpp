@@ -42,8 +42,18 @@ void PinThreadToCore(int core_id)
 //===============================================================================|
 /**
  * @brief constructor
+ * 
+ * @param url the bolt url to connect to. It can be either a single node or a
+ *	cluster url. The url can be either bolt:// or bolt+s:// for single node, and 
+ *	neo4j:// or neo4j+s:// for cluster url. The default port is 7687 if not specified.
+ * @param auth the authentication token to use for the connection. It can be either
+ *	Basic or Kerberos or any other authentication method supported by the server.
+ * @param extras any extra connection parameters to use for the connection. It can
+ *	include items such as database name, bookmarks, routing context, etc. 
+ * @param num_connections the number of connections to create per core. The default is 1.
  */
-NeoDriver::NeoDriver(std::string urls, BoltValue auth, BoltValue extras, int cores)
+NeoDriver::NeoDriver(std::string url, BoltValue auth, BoltValue extras, 
+	int num_connections)
 	: _auth(std::move(auth))
 {
 	next_client_id = 0;
@@ -60,39 +70,42 @@ NeoDriver::NeoDriver(std::string urls, BoltValue auth, BoltValue extras, int cor
 	} // end for copy
 
 	// check url info and set ssl if needed
-	size_t pos = urls.find_first_of(URL_SEPARATOR);
+	size_t pos = url.find_first_of(URL_SEPARATOR);
 	if (pos != std::string::npos)
 	{
-		if (!urls.substr(0, pos).compare(BOLT_NORMAL))
+		if (!url.substr(0, pos).compare(BOLT_NORMAL))
 		{
 			ssl_on = false;
 			clustred = false;
 		} // end else if no ssl on single
-		else if (!urls.substr(0, pos).compare(BOLT_SSL))
+		else if (!url.substr(0, pos).compare(BOLT_SSL))
 		{
 			ssl_on = true;
 			clustred = false;
 		} // end if ssl on single
-		else if (!urls.substr(0, pos).compare(NEO4J_NORMAL))
+		else if (!url.substr(0, pos).compare(NEO4J_NORMAL))
 		{
 			ssl_on = false;
 			clustred = true;
 		} // end if ssl on single
-		else if (!urls.substr(0, pos).compare(NEO4J_SSL))
+		else if (!url.substr(0, pos).compare(NEO4J_SSL))
 		{
 			ssl_on = false;
 			clustred = true;
 		} // end else if ssl on cluster
 
-		_urls = urls.substr(pos + 3, urls.length() - (pos + 3));
+		_url = url.substr(pos + 3, url.length() - (pos + 3));
 	} // end if pos
 
-	// create contexts and their corresponding pools and routers
-	_cores.reserve(cores);
-	for (int i = 0; i < cores; i++)
+	// create contexts and their corresponding pools
+	int max_cores = std::thread::hardware_concurrency() >> 1;
+	max_cores += max_cores == 0 ? 1 : 0;
+
+	_cores.reserve(max_cores);
+	for (int i = 0; i < max_cores; i++)
 	{
 		int efd = epoll_create1(0);
-		NeoPool pool(efd, ssl_on, clustred, i, POOL_SIZE, _urls, &_auth, &_extras);
+		NeoPool pool(efd, ssl_on, clustred, i, num_connections, _url, &_auth, &_extras);
 
 		CoreContext ctx
 		(

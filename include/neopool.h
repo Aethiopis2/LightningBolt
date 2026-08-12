@@ -34,7 +34,7 @@ public:
 	(
 		int epfd_, 
 		bool ssl,
-		bool clustred,
+		bool clustred_,
 		int id,
 		size_t ncells, 
 		std::string& urls,
@@ -66,14 +66,24 @@ public:
 	NeoPool(const NeoPool&) = delete;
 	NeoPool& operator=(const NeoPool&) = delete;
 
-	NeoConnection* Acquire();
+	void Add_Connection(std::unique_ptr<NeoConnection> conn)
+	{
+		if (conn)
+		{
+			conns.push_back(std::move(conn));
+		}
+	} // end if Add_Connection
+
+	NeoConnection* Acquire(const ROLE role = ROLE::AUTO);
 	inline const std::vector<std::unique_ptr<NeoConnection>>& Connections() const;
+	inline size_t Size() const { return conns.size(); }
 	void Close();
 
 private:
 
 	int epfd;
 	int core_id;
+	bool clustred;
 
 	std::vector<std::unique_ptr<NeoConnection>> conns;
 	std::atomic<size_t> rr{ 0 };

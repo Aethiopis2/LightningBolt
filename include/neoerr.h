@@ -41,6 +41,7 @@ enum class LBAction : u8
 	LB_RETRY,		// retry request or connection depends on domain
 	LB_RESET,		// send bolt RESET
 	LB_REROUTE,		// refresh route, send bolt ROUTE
+	LB_SETROUTE,	// set route table and retry
 	LB_FLUSH,		// flush the stream, send the bytes and clear buffer
 	LB_IGNORE,		// ignore this task
 	LB_FAIL,		// terminal failure, point of no return.

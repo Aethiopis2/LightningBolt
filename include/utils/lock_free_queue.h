@@ -40,6 +40,37 @@ public:
             slot.full.store(false, std::memory_order_relaxed);
     } // end Constructor
 
+    
+    /**
+     * @brief move constructor
+	 */
+    LockFreeQueue(LockFreeQueue&& other) noexcept
+		: buffer(other.buffer), head(other.head.load()), tail(other.tail.load())
+    {
+		other.buffer.clear(); // Clear the other buffer to avoid double deletion
+		other.head.store(0);
+		other.tail.store(0);
+	} // end move constructor
+
+
+    /**
+	 * @brief move assignment operator
+     */
+    LockFreeQueue& operator=(LockFreeQueue&& other) noexcept
+    {
+        if (this != &other)
+        {
+			buffer = std::move(other.buffer);
+            head.store(other.head.load());
+            tail.store(other.tail.load());
+
+            other.buffer.clear(); // Clear the other buffer to avoid double deletion
+            other.head.store(0);
+			other.tail.store(0);
+		} // end if not self assign
+        return *this;
+	} // end move assign
+
 
     /**
      * @brief places the next item into queue based as const ref

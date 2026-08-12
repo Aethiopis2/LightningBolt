@@ -64,7 +64,7 @@ enum class RequestCmdType
     Discard,
 	Route,
     Reset,
-    Logoff,
+    Logoff
 };
 
 
@@ -85,17 +85,19 @@ enum class QueryMode : u8
 struct RequestCommand
 {
     RequestCmdType type;       // the command types, see enum above
+    QueryMode mode;
 
-    const char* cypher;     // the query string in relation to run command
-    int n = -1;             // size for fetching
+    int retry_count{ 0 };		// how many times we've retried for this request on failed attempts
+    int n = -1;                 // size for fetching
+
+    std::string cypher;     // the query string in relation to run command
+    std::string database;   // database name for begin trx
 
     BoltValue routes;       // list of routes for route
     BoltValue param = BoltValue::Make_Map();   // params for run, begin, commit and rollback
     BoltValue extra = BoltValue::Make_Map();   // params for run
 	BoltValue bookmark = BoltValue::Make_List();  // list of bookmarks for begin trx
-	std::string database;   // database name for begin trx
-    QueryMode mode;
-
+	
     std::function<void(BoltResult&)> cb = nullptr;       // callback for async
 
     // constructors

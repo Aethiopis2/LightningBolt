@@ -21,7 +21,7 @@
 //          ENUM & TYPES
 //===============================================================================|
 constexpr static int MAX_EVENTS = 1024;
-constexpr static int POOL_SIZE = 1;
+constexpr static int CONNECTIONS_PER_POOL = 1;
 
 
 
@@ -93,9 +93,10 @@ class NeoDriver
 {
 public:
 
-    NeoDriver(std::string urls, BoltValue auth,
+    NeoDriver(std::string url, 
+        BoltValue auth,
         BoltValue extra = BoltValue::Make_Map(),
-        const int pool_size_ = POOL_SIZE);
+        const int num_connections = CONNECTIONS_PER_POOL);
     ~NeoDriver();
 
     LBStatus Execute_Async(std::function<void(BoltResult&)> cb, const char* query,
@@ -110,14 +111,14 @@ public:
 
 private:
 
-    std::string _urls;       // raw unfiltered url string for database connection
-    std::string last_error;  // the last error string
-    BoltValue _auth;         // authentication token
-    BoltValue _extras;       // any extra connection params (power user mode, not me).
+    std::string _url;       // raw unfiltered url string for database connection
+    std::string last_error; // the last error string
+    BoltValue _auth;        // authentication token
+    BoltValue _extras;      // any extra connection params (power user mode, not me).
 
     u64 next_client_id;     // id for the next connection in the pool
-	bool ssl_on;           // ssl on or off
-	bool clustred;         // single or cluster
+	bool ssl_on;            // ssl on or off
+	bool clustred;          // single or cluster
 
     std::vector<CoreContext> _cores;
     std::atomic<size_t> rr_core{ 0 };

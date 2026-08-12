@@ -42,6 +42,15 @@ struct Neo4jVerInfo
 };
 
 
+/**
+ * @brief roles for clustered mode connection
+ */
+enum class ROLE {
+    AUTO,
+    LEADER,
+    FOLLOWER
+};
+
 
 // forwards
 class NeoDriver;
@@ -95,11 +104,14 @@ public:
 
     void Terminate();
     void Set_Host_Address(const std::string& host, const std::string& port);
-    void Wait_For_Response();
+    
+    void Set_Connection_Role(const ROLE _role);
 
     std::string Get_Hostname() const;
     std::string Get_Port() const;
     std::string Get_Last_Error() const;
+	std::string Get_Host_Address() const;
+    ROLE Get_Connection_Role() const;
 
 private:
 
@@ -115,6 +127,7 @@ private:
     std::atomic<bool> should_wait;  // used to hack the startup on auto retries to avoid waits!
     std::atomic<s64> sync_count;    // tracks responses and used to control flow viz wait()...notify_one().
 	BoltResult last_err;    // holds the last error result for retrieval by session
+    ROLE role;      // current connection role
 
     // connection paramters; kept inside driver
     BoltValue* pauth;       // authentication token
@@ -162,13 +175,14 @@ private:
     void Success_Run(DecoderTask*& ptask);
     void Success_Record(DecoderTask*& ptask);
     void Success_Reset(DecoderTask*& ptask);
+	void Success_Route(DecoderTask*& ptask);
 
     void Handle_Record(DecoderTask*& ptask);
     void Handle_Failure(DecoderTask*& ptask);
     void Handle_Ignored(DecoderTask*& ptask);
 
     void Encode_Pull(const int n);
-    void Add_Sync_Count();
+
 	void Sub_Sync_Count();
 
     BoltMessage Routev43(const BoltValue& routing,

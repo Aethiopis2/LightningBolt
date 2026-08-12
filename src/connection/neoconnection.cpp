@@ -34,6 +34,7 @@ NeoConnection::NeoConnection(bool ssl_enabled,
 
     is_open = false;
     recv_paused = false;
+    role = ROLE::AUTO;
 
     // set the url
     if (ssl_enabled) Enable_SSL();
@@ -83,7 +84,6 @@ LBStatus NeoConnection::Connect_Neo4j(const int epfd_, const int id,
     LBStatus rc = Handshake(epfd, this, id);
     if (!LB_OK(rc)) return rc;
 
-    Add_Sync_Count();
     if (supported_version.Get_Version() >= 5.1)       // use version 6/5 hello
         rc = Send_Hellov5();
     else  // version 4 and below 
@@ -544,22 +544,16 @@ void NeoConnection::Set_Host_Address(const std::string& host, const std::string&
 
 
 /**
- * @brief waits for the response of the last sent message by waiting on the
- *  sync_count atomic variable. The variable is incremented by the encoder loop
- *  once a message is sent and decremented by the decoder loop once a response
- *  is received. The function returns once the count is less than or equal to
- *  zero, meaning all sent messages have been responded to.
+ * @brief set's the current connection role, useful during clustred/routing
+ *  mode operation.
+ * 
+ * @param _role the current role to set among one of the three enum constants
+ *  AUTO, LEADER, or FOLLOWER.
  */
-void NeoConnection::Wait_For_Response()
+void NeoConnection::Set_Connection_Role(const ROLE _role)
 {
-    while (1)
-    {
-        s64 current = sync_count.load(std::memory_order_acquire);
-        if (current <= 0) break;
-
-        sync_count.wait(current);
-    } // end while
-} // end Wait_Response
+    role = role;
+} // end Set_Connection_Role
 
 
 /**
@@ -578,12 +572,33 @@ std::string NeoConnection::Get_Hostname() const { return hostname; }
 std::string NeoConnection::Get_Port() const { return port; }
 
 
-
+/**
+ * @brief returs the last error encountered as string
+ */
 std::string NeoConnection::Get_Last_Error() const
 {
     return last_err.Get_Error_Desc();
 } // end Get_Last_Error
 
+
+/**
+ * @brief gets the hostname or ip:port address of the connected peer
+ *
+ * @return the hostname:port or ip:port address as string
+ */
+std::string NeoConnection::Get_Host_Address() const
+{
+    return hostname + ":" + port;
+} // end Get_Host_Address
+
+
+/**
+ * @brief return's the current connection role set, as an enum constant
+ */
+ROLE NeoConnection::Get_Connection_Role() const
+{
+    return role;
+} // end Get_Connection_Role
 
 
 //===============================================================================|
@@ -1402,9 +1417,37 @@ void NeoConnection::Success_Reset(DecoderTask*& ptask)
         ptask->cb(LB_Make(), last_err);
     } // end else whatever
 
-    ptask = Get_Next_Task(ptask->view.start + ptask->view.offset + ptask->view.next_offset, ptask->view.size -
-        (ptask->view.next_offset - ptask->view.offset));
+    ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+    ptask->view.offset = ptask->view.next_offset;
+
+    ptask = Get_Next_Task(ptask->view.start + ptask->view.offset,
+        ptask->view.size);
 } // end Success_Reset
+
+
+void NeoConnection::Success_Route(DecoderTask*& ptask)
+{
+    u8* ptr = read_buf.Data() + ptask->view.start + ptask->view.offset;
+    BoltMessage routing;
+    LBStatus rc = decoder.Decode(ptr, ptask->result.summary);
+    if (!LB_OK(rc))
+    {
+        ptask->cb(rc, ptask->result);
+        return;
+    } // end if decode error
+
+    u32 bytes = LB_Aux(rc);
+    ptask->result.pdec = &decoder;
+    ptask->result.start_offset = (ptask->view.start + ptask->view.offset + bytes);
+    ptask->view.size -= (ptask->view.next_offset - ptask->view.offset);
+    ptask->view.offset = ptask->view.next_offset;
+
+	ptask->cb(LB_Make(LBAction::LB_SETROUTE, LBDomain::LB_DOM_NEO4J), ptask->result);
+    ptask = Get_Next_Task(ptask->view.start + ptask->view.offset,
+        ptask->view.size);
+
+} // end Success_Route
+
 
 
 /**
@@ -1498,27 +1541,6 @@ void NeoConnection::Encode_Pull(const int n)
     encoder.Encode(pull);
     Release_Pool<BoltValue>(offset);
 } // end Send_Pull
-
-
-/**
- * @brief adds to the sync count, this is used to track the number of pending messages
- *  and wake waiting threads inorder to simulate a sync fetch style of processing results.
- */
-void NeoConnection::Add_Sync_Count()
-{
-    sync_count.fetch_add(1, std::memory_order_acq_rel);
-} // end Add_Ref
-
-
-/**
- * @brief subtracts from the sync count, this is used to track the number of pending messages
- *  and wake waiting threads inorder to simulate a sync fetch style of processing results.
- */
-void NeoConnection::Sub_Sync_Count()
-{
-    u64 prev = sync_count.fetch_sub(1, std::memory_order_acq_rel);
-    sync_count.notify_one();
-} // end Sub_Ref
 
 
 /**

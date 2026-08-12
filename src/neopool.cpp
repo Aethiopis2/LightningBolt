@@ -32,13 +32,13 @@ NeoPool::NeoPool
 (
 	int epfd_,
 	bool ssl,
-	bool clustered,
+	bool clustered_,
 	int id,
 	size_t ncells, 
 	std::string& urls, 
 	BoltValue* pauth, 
 	BoltValue* pextras)
-	: epfd(epfd_), core_id(id)
+	: epfd(epfd_), core_id(id), clustred(clustered_)
 {
 	conns.reserve(ncells);
 	for (size_t i = 0; i < ncells; ++i)
@@ -52,10 +52,26 @@ NeoPool::NeoPool
  * @brief returns the next cell in the pool based on the acquire function pointer 
  *	function address set by the constructor.
  */
-NeoConnection* NeoPool::Acquire()
+NeoConnection* NeoPool::Acquire(const ROLE role)
 {
-	size_t idx = rr.fetch_add(1, std::memory_order_relaxed);
-	return conns[idx % conns.size()].get();
+	if (!clustred || role == ROLE::AUTO)
+	{
+		size_t idx = rr.fetch_add(1, std::memory_order_relaxed);
+		return conns[idx % conns.size()].get();
+	} // end if normal
+	else
+	{
+		size_t count = 0;
+		size_t idx = rr.fetch_add(1, std::memory_order_relaxed);
+		NeoConnection* pc = conns[idx % conns.size()].get();
+		while (pc->Get_Connection_Role() != role && count++ < conns.size())
+		{
+			idx = rr.fetch_add(1, std::memory_order_relaxed);
+			pc = conns[idx % conns.size()].get();
+		} // end while
+
+		return pc;
+	} // end else
 } // end Acquire
 
 

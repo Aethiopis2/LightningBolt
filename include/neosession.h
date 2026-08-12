@@ -3,7 +3,7 @@
  *
  * @version 1.0
  * @date created 20th of April 2026, Sunday.
- * @date updated 20th of April 2026, Sunday.
+ * @date updated 9th of August 2026, Sunday.
  */
 #pragma once
 
@@ -225,8 +225,70 @@ QueryMode Detect_Query_Mode(std::string_view query)
 //===============================================================================|
 class NeoDriver;
 
+struct RoutingTable
+{
+	bool ssl_enabled = false;
+	BoltValue* pauth;  
+	BoltValue* pextras;
+	std::vector<NeoConnection*> leaders;
+	std::vector<NeoConnection*> followers;
+
+	RoutingTable() = default;
+	RoutingTable(BoltValue& writers, BoltValue& readers)
+	{
+		for (size_t i = 0; i < writers.list_val.size; ++i)
+		{
+			std::string url = writers(i).ToString();
+			leaders.push_back(new NeoConnection(ssl_enabled, url, pauth, pextras));
+		} // end for writers
+		for (size_t i = 0; i < readers.size; ++i)
+		{
+			std::string url = readers(i).ToString();
+			followers.push_back(new NeoConnection(ssl_enabled, url, pauth, pextras));
+		} // end for readers
+	} // end cntr
 
 
+	void Refresh_Route(BoltValue& writers, BoltValue& readers)
+	{
+		size_t total = writers.list_val.size + readers.list_val.size;
+		size_t current = leaders.size() + followers.size();
+
+		if (total > current)
+		{
+			for (size_t i = 0; i < writers.list_val.size; ++i)
+			{
+				std::string url = writers(i).ToString();
+				auto it = std::find_if(leaders.begin(), leaders.end(), [&](NeoConnection* pc) {
+					return pc->Get_Host_Address() == url;
+					});
+
+				if (it != leaders.end())
+				{
+					leaders.push_back(new NeoConnection(ssl_enabled, url, pauth, pextras));
+				}
+
+				// which writers are now followers? move them into the leaders list
+				leaders.push_back(std::move(followers.begin(), followers.end(), [&](NeoConnection* pc) {
+					return pc->Get_Host_Address() == writers(i).ToString();
+					}));
+				// delete all leaders that are not in the new list
+				leaders.erase(std::remove_if(leaders.begin(), leaders.end(), [&](NeoConnection* pc) {
+					return writers(i).ToString() != pc->Get_Host_Address();
+					}), leaders.end());
+			} // end for writers
+			for (size_t i = 0; i < readers.list_val.size; ++i)
+			{
+				std::string url = readers(i).ToString();
+				followers.push_back(new NeoConnection(ssl_enabled, url, pauth, pextras));
+			} // end for readers
+		} // end if total > current
+
+	} // end Refresh_Route
+};
+
+
+std::atomic<RoutingTable*> g_routing{ nullptr };
 
 
 //===============================================================================|
@@ -239,11 +301,38 @@ class NeoSession
 
 public:
 
-	NeoSession() : pconn(nullptr), pool(*(NeoPool*)nullptr) {}
-	NeoSession(NeoPool& _pool) : pconn(nullptr), pool(_pool) {}
-	NeoSession(NeoSession&& other) : pconn(other.pconn), pool(other.pool) { }
+	/**
+	 * @brief default constructor; initializes the session with no connection and no pool.
+	 */
+	NeoSession() : pconn(nullptr), pool(*(NeoPool*)nullptr)  { } // end default cntr
+
+
+	/**
+	 * @brief constructor that initializes the session with a connection pool.
+	 */
+	NeoSession(NeoPool& _pool) : pconn(nullptr), pool(_pool) { } // end pool cntr
+
+
+	/**
+	 * @brief move constructor; transfers ownership of the connection and pool 
+	 *	from another session.
+	 */
+	NeoSession(NeoSession&& other) : pconn(other.pconn), pool(other.pool) 
+	{
+		other.pconn = nullptr;
+	} // end move cntr
+
+
+	/**
+	 * @brief destructor; closes the session and releases the connection back to the pool.
+	 */
 	~NeoSession() { Close(); }
 
+
+	/**
+	 * @brief move assignment operator; transfers ownership of the connection and 
+	 *	pool from another session.
+	 */
 	NeoSession& operator=(NeoSession&& other)
 	{
 		if (this != &other)
@@ -266,72 +355,27 @@ public:
 	 *
 	 * @returns LB_OK on success or LB_FAIL on terminal fail
 	 */
-	LBStatus Start_Session(int epfd, int client_id)
+	LBStatus Start_Session(int epfd, int client_id, bool is_routed = false)
 	{
 		if (!pconn)
 		{
 			pconn = pool.Acquire();
 		} // end if no connection
 
-		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id,
-			[&](LBStatus ret, BoltResult& res) {
-				if (res.error)
-				{
-					if (!results.Enqueue(std::move(res)))
-					{
-						ret = LB_Make(
-							LBAction::LB_FAIL,
-							LBDomain::LB_DOM_DRIVER,
-							LBCode::LB_CODE_STATE_QUEUE_MEM
-						);
-					} // end if no enqueue
+		Add_RCount();
+		LBStatus rc = pconn->Connect_Neo4j(epfd, client_id, LB_Handle_Status);
+		Wait_For_Response();
 
-				} // end if error
-				
-				rc = ret;
-			});
-
-		pconn->Wait_For_Response();
-		if (!LB_OK(rc))
+		// result ready, check if we got a success or failure
+		auto& r = results.Front().value().get();
+		if (r.error)
 		{
-			LBAction action = LB_Action(rc);
-			LBDomain domain = LB_Domain(rc);
-			LBCode code = LB_Code(rc);
+			rc = LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_NEO4J);
+			pconn->Terminate();
+		} // end if error
 
-			while (action == LBAction::LB_RETRY && ++retry_count < MAX_RETRY)
-			{
-#ifdef _DEBUG
-				Utils::Print("connection #%d failed. Retry attempt %d of %d times.",
-					client_id, retry_count, MAX_RETRY);
-#endif
-				std::this_thread::sleep_for(std::chrono::milliseconds(
-					(retry_count - 1) * 500));
-
-				rc = pconn->Connect_Neo4j(epfd, client_id,
-					[&](LBStatus ret, BoltResult& res) {
-						if (res.error)
-						{
-							if (!results.Enqueue(std::move(res)))
-							{
-								ret = LB_Make(
-									LBAction::LB_FAIL,
-									LBDomain::LB_DOM_DRIVER,
-									LBCode::LB_CODE_STATE_QUEUE_MEM
-								);
-							} // end if no enqueue
-
-						} // end if error
-
-						rc = ret;
-					});
-
-				action = LB_Action(rc);
-			} // end while
-
-			// at the end of the day..
-			retry_count = 0;
-		} // end if failed to connect
-
+		session_epfd = epfd;
+		cli_id = client_id;
 		return rc;
 	} // end Start_Session
 
@@ -342,7 +386,6 @@ public:
         BoltValue&& params = BoltValue::Make_Map(),
         BoltValue&& extras = BoltValue::Make_Map())
     {
-        CHECK_THREAD();
         if (!pconn) return FAIL();
 
 		RequestCommand cmd;
@@ -356,7 +399,45 @@ public:
 				Detect_Query_Mode(query)) : Detect_Query_Mode(query);
 		cmd.cb = std::move(cb);
 
-		LBStatus rc = pconn->Run(cmd.cypher, cmd.param, cmd.extra, cmd.n,
+		if (!requests.Enqueue(std::move(cmd)))
+			return FAIL();
+
+		return Execute_Command(requests.Size() - 1);
+	} // end Run
+
+
+	LBStatus Run_Async_Routed(
+		std::function<void(BoltResult&)> cb,
+		const char* query,
+		BoltValue&& params = BoltValue::Make_Map(),
+		BoltValue&& extras = BoltValue::Make_Map())
+	{
+		RequestCommand cmd;
+		cmd.cypher = query;
+		cmd.param = std::move(params);
+		cmd.extra = std::move(extras);
+		cmd.type = RequestCmdType::Run;
+		cmd.mode = cmd.extra.size != 0 ?
+			(cmd.extra["mode"].type != BoltType::Unk ?
+				(cmd.extra["mode"].ToString() == "r" ? QueryMode::Read : QueryMode::Write) :
+				Detect_Query_Mode(query)) : Detect_Query_Mode(query);
+		cmd.cb = std::move(cb);
+
+		LBStatus rc;
+		if (cmd.mode != prev_mode)
+		{
+			if (pconn) pconn = nullptr;		// just blow it away
+
+			pconn = Acquire(cmd.mode);
+			if (!pconn) return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER);
+
+			rc = pconn->Connect_Neo4j(session_epfd, cli_id, LB_Handle_Status);
+			if (!LB_OK(rc)) return rc;
+
+			prev_mode = cmd.mode;
+		} // end if mode changed
+
+		rc = pconn->Run(cmd.cypher.c_str(), cmd.param, cmd.extra, cmd.n,
 			LB_Handle_Status);
 
 		if (!LB_OK(rc))
@@ -366,7 +447,7 @@ public:
 			return FAIL();
 
 		return LB_Make();
-	} // end Run
+	} // end Run_Async_Routed
 
 
 	/**
@@ -543,48 +624,59 @@ public:
 
 private:
 
-	NeoConnection* pconn;
+	int session_epfd{ -1 };	// epoll descriptor for this session
+	int cli_id{ -1 };		// client id for this session
+	s64 prev_rcount{ 0 };	// previous request count for this session
+
+	QueryMode prev_mode{ QueryMode::Auto };	// previous query mode for this session
+	NeoConnection* pconn;	// used during non-routing processing, i.e. when we have a single connection to the server
 	NeoPool& pool;
 
-	int retry_count{ 0 };		// how many times we've retried a failed attempt
+	std::atomic<s64> rcount{ 0 };			// number of requests sent
+	std::atomic<size_t> rr_leaders{ 0 };	// round robin pointer for leader connections
+	std::atomic<size_t> rr_followers{ 0 };	// round robin pointer for follower connections
 
 	LockFreeQueue<RequestCommand> requests;		// query requests pending
 	LockFreeQueue<BoltResult> results;			// results pending 
 
-	LBStatus Execute_Command()
+
+	LBStatus Execute_Command(const int index)
 	{
 		LBStatus rc;
-		for (size_t i = 0; i < requests.Size(); i++)
+		if (requests.Is_Empty())
 		{
-			auto& cmd = requests[i].value().get();
-			switch (cmd.type)
-			{
-			case RequestCmdType::Run:
-				rc = pconn->Run(cmd.cypher, cmd.param, cmd.extra, cmd.n, LB_Handle_Status);
-				if (!LB_OK(rc)) return rc;
-				break;
+			return LB_Make(LBAction::LB_FAIL, LBDomain::LB_DOM_DRIVER, 
+				LBCode::LB_CODE_STATE_QUEUE_SIZE);
+		} // end if not cool
 
-			case RequestCmdType::Begin:
-				rc = pconn->Begin(cmd.extra, LB_Handle_Status);
-				if (!LB_OK(rc)) return rc;
-				break;
+		auto& cmd = requests[index].value().get();
+		switch (cmd.type)
+		{
+		case RequestCmdType::Run:
+			rc = pconn->Run(cmd.cypher.c_str(), cmd.param, cmd.extra, cmd.n, LB_Handle_Status);
+			if (!LB_OK(rc)) return rc;
+			break;
 
-			case RequestCmdType::Commit:
-				rc = pconn->Commit(cmd.extra, LB_Handle_Status);
-				if (!LB_OK(rc)) return rc;
-				break;
+		case RequestCmdType::Begin:
+			rc = pconn->Begin(cmd.extra, LB_Handle_Status);
+			if (!LB_OK(rc)) return rc;
+			break;
 
-			case RequestCmdType::Rollback:
-				rc = pconn->Rollback(cmd.extra, LB_Handle_Status);
-				if (!LB_OK(rc)) return rc;
-				break;
+		case RequestCmdType::Commit:
+			rc = pconn->Commit(cmd.extra, LB_Handle_Status);
+			if (!LB_OK(rc)) return rc;
+			break;
 
-			case RequestCmdType::Logoff:
-				rc = pconn->Logoff(LB_Handle_Status);
-				if (!LB_OK(rc)) return rc;
-				break;
-			} // end cmd.type
-		} // end for 
+		case RequestCmdType::Rollback:
+			rc = pconn->Rollback(cmd.extra, LB_Handle_Status);
+			if (!LB_OK(rc)) return rc;
+			break;
+
+		case RequestCmdType::Logoff:
+			rc = pconn->Logoff(LB_Handle_Status);
+			if (!LB_OK(rc)) return rc;
+			break;
+		} // end cmd.type
 
 		return LB_Make();
 	} // end Execute_Command
@@ -597,19 +689,52 @@ private:
 	} // end FAIL
 
 
-#ifdef LB_DEBUG
-    inline void CHECK_THREAD() const
-    {
-        LB_ASSERT_THREAD(owner_thread);
-    }
-#else
-    inline void CHECK_THREAD() const {}
-#endif
+	/**
+	 * @brief adds to the rcount, this is used to track the number of pending messages
+	 *  and wake waiting threads inorder to simulate a sync fetch style of processing results.
+	 */
+	inline void NeoSession::Add_RCount()
+	{
+		rcount.fetch_add(1, std::memory_order_acq_rel);
+	} // end Add_Ref
+
+
+	/**
+	 * @brief subtracts from the rcount, this is used to track the number of pending messages
+	 *  and wake waiting threads inorder to simulate a sync fetch style of processing results.
+	 */
+	inline void NeoSession::Sub_RCount()
+	{
+		prev_rcount = rcount.fetch_sub(1, std::memory_order_acq_rel);
+		rcount.notify_one();
+	} // end Sub_Ref
+
+
+	/**
+	 * @brief waits for the response of the last sent requestby waiting on the
+	 *  rcount atomic variable, which is short for "request count". 
+	 *	This function blocks until the response is received.
+	 */
+	void NeoSession::Wait_For_Response()
+	{
+		while (1)
+		{
+			s64 current = rcount.load(std::memory_order_acquire);
+			if (current <= prev_rcount)
+			{
+				prev_rcount = current;
+				break;
+			} // end if done
+
+			rcount.wait(current);
+		} // end while
+	} // end Wait_Response
 
 
 	std::function<void(LBStatus, BoltResult&)> LB_Handle_Status = [&](LBStatus ret, BoltResult& res)
 		{
 			LBAction action = LB_Action(ret);
+			LBDomain domain = LB_Domain(ret);
 			LBStatus rc;
 
 			// LB_OK = done
@@ -617,21 +742,37 @@ private:
 			// LB_RETRY = failed request, retry
 			// LB_ROUTE = route error, refresh route table
 			// LB_FAIL = terminal oops.
-			// All domains are from Neo4j except for enqueue errors which are from driver domain.
 
 			switch (action)
 			{
 			case LBAction::LB_OK:
 			case LBAction::LB_FAIL:
 			{
-				auto cmd = requests.Dequeue().value();
-				if (cmd.cb)
-					cmd.cb(res);
+				// have we requests?
+				if (!requests.Is_Empty())
+				{
+					auto cmd = requests.Dequeue().value();
+					if (cmd.cb)
+						cmd.cb(res);
+					else
+					{
+						if (!results.Enqueue(std::move(res)))
+						{
+							res = BoltResult();
+						} // end if no enqueue
+
+						pconn->Sub_Sync_Count();
+					} // end else sync
+				} // end if neo4j domain
 				else
 				{
-					results.Enqueue(std::move(res));
+					if (!results.Enqueue(std::move(res)))
+					{
+						res = BoltResult();
+					} // end if no enqueue
+
 					pconn->Sub_Sync_Count();
-				}
+				} // end else sync
 			} break;
 
 			case LBAction::LB_RESET:
@@ -642,14 +783,15 @@ private:
 
 			case LBAction::LB_RETRY:
 			{
-				LBDomain domain = LB_Domain(ret);
-				if (retry_count++ < MAX_RETRY)
+				auto* pres = &requests.Front().value().get();
+
+				if (pres->retry_count++ < MAX_RETRY)
 				{
 					std::this_thread::sleep_for(std::chrono::milliseconds(
-						(retry_count - 1) * 500));
+						(pres->retry_count - 1) * 500));
 #ifdef _DEBUG
 					Utils::Print("Retry attempt %d of %d times.",
-						retry_count, MAX_RETRY);
+						pres->retry_count, MAX_RETRY);
 #endif
 					if (domain == LBDomain::LB_DOM_SYS || domain == LBDomain::LB_DOM_SSL)
 					{
@@ -660,14 +802,19 @@ private:
 					} // end if domain
 
 					// retry the command
-					rc = Execute_Command();
-					if (!LB_OK(rc))
-						LB_Handle_Status(rc, res);
+					for (size_t i = 0; i < requests.Size(); ++i)
+					{
+						rc = Execute_Command(i);
+						if (!LB_OK(rc))
+						{
+							LB_Handle_Status(rc, res);
+							break;
+						} // end if not ok
+					} // end for
 				} // end if retry count
 				else
 				{
-					// too many retries, fail the command
-					retry_count = 0;
+					// too many retries, fail the command;
 					auto cmd = requests.Dequeue().value();
 					if (cmd.cb)
 						cmd.cb(res);
@@ -678,11 +825,42 @@ private:
 					} // end else
 
 					// continue with the next requests
-					rc = Execute_Command();
-					if (!LB_OK(rc))
-						LB_Handle_Status(rc, res);
+					for (size_t i = 0; i < requests.Size(); ++i)
+					{
+						rc = Execute_Command(i);
+						if (!LB_OK(rc))
+						{
+							LB_Handle_Status(rc, res);
+							break;
+						} // end if not ok
+					} // end for
 				} // end else
 			} break;
+
+			case LBAction::LB_SETROUTE:
+			{
+				BoltValue readers, writers, route;
+				size_t count = res.summary.msg(0)["rt"]["servers"].list_val.size;
+				for (size_t i = 0; i < count; i++)
+				{
+					BoltValue server = res.summary.msg(0)["rt"]["servers"];
+					std::string role = server(i)["role"].ToString();
+					if (!role.compare("ROUTE"))
+						route = server(i)["addresses"];
+					else if (!role.compare("WRITE"))
+						writers = server(i)["addresses"];
+					else if (!role.compare("READ"))
+						readers = server(i)["addresses"];
+				} // end for
+
+				if (!g_routing.load(std::memory_order_acquire))
+				{
+					g_routing.store(new RoutingTable{ writers, readers }, std::memory_order_release);
+				} // end if old table
+				else 
+				
+			} break;
+
 			} // end switch
 		}; // end LB_Handle_Status
 
